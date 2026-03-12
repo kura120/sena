@@ -1,0 +1,68 @@
+# ── Note ─────────────────────────────────────────────────────────────────────
+# .github/instructions/ and docs/ are committed as a template baseline on
+# first commit. After cloning, contributors who want to evolve their own
+# instruction files locally without pushing them should add the paths to
+# their personal .git/info/exclude file:
+#
+#   .github/instructions/
+#
+# This keeps the template visible to everyone while local evolutions stay private.
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Rust ─────────────────────────────────────────────────────────────────────
+target/
+**/*.rs.bk
+Cargo.lock
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.uv/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── C# / .NET ─────────────────────────────────────────────────────────────────
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.nupkg
+
+# ── Sena Runtime ─────────────────────────────────────────────────────────────
+# SoulBox is personal identity data — never committed.
+soulbox/*.toml
+soulbox/*.toml.enc
+soulbox/*.salt
+soulbox/backups/
+
+# Local telemetry and logs stay on device.
+**/.sena/
+**/logs/
+*.log
+
+# Ollama models are large and local — never committed.
+models/
+*.gguf
+*.ggml
+
+# ── Environment ──────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Editor ───────────────────────────────────────────────────────────────────
+.zed/
+.idea/
+.vscode/
+*.swp
+*.swo

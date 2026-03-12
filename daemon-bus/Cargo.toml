@@ -1,0 +1,39 @@
+[package]
+name = "daemon-bus"
+version = "0.1.0"
+edition = "2021"
+description = "Sena root process — gRPC server, event bus, process supervision, priority arbitration"
+publish = false
+
+[[bin]]
+name = "daemon-bus"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+# Serialization and config
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Error handling
+thiserror = "2"
+
+# Unique identifiers for tasks, escalations, trace correlation
+uuid = { version = "1", features = ["v4"] }
+
+# Stream utilities for gRPC server-streaming RPCs
+tokio-stream = "0.1"
+
+[build-dependencies]
+tonic-build = "0.12"

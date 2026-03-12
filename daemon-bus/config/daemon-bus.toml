@@ -1,0 +1,187 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# daemon-bus configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Every tunable value that daemon-bus uses lives here.
+# Nothing in source code is hardcoded — all thresholds, timeouts, limits,
+# and identifiers are read from this file at startup.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# gRPC Server
+# ─────────────────────────────────────────────────────────────────────────────
+
+[grpc]
+bind_address = "127.0.0.1"
+bind_port = 50051
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal Event Bus (tokio broadcast channel)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[bus]
+# Capacity of the tokio broadcast channel. Must be a power of two.
+# If a slow subscriber falls behind by this many messages, it receives a
+# lagged error and must re-subscribe. Sized for burst traffic during boot.
+channel_capacity = 256
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Boot Sequence
+# ─────────────────────────────────────────────────────────────────────────────
+# PRD §3.2: target < 5 seconds total to SENA_READY (excluding model load).
+# Each subsystem has its own timeout. If a required subsystem fails to signal
+# ready within its timeout, daemon-bus halts boot and reports the failure.
+
+[boot]
+# Overall boot sequence timeout in milliseconds.
+# If SENA_READY is not reached within this window, boot is considered failed.
+total_timeout_ms = 30000
+
+[boot.subsystems.memory_engine]
+signal = "MEMORY_ENGINE_READY"
+timeout_ms = 5000
+required = true
+depends_on = ["DAEMON_BUS_READY"]
+
+[boot.subsystems.platform]
+signal = "PLATFORM_READY"
+timeout_ms = 5000
+required = true
+depends_on = ["DAEMON_BUS_READY"]
+
+[boot.subsystems.agents]
+signal = "AGENTS_READY"
+timeout_ms = 5000
+required = true
+depends_on = ["MEMORY_ENGINE_READY"]
+
+[boot.subsystems.ollama]
+signal = "OLLAMA_READY"
+timeout_ms = 15000
+required = true
+depends_on = ["AGENTS_READY"]
+
+[boot.subsystems.model_probe]
+signal = "MODEL_PROFILE_READY"
+timeout_ms = 10000
+required = true
+depends_on = ["OLLAMA_READY"]
+
+[boot.subsystems.lora_manager]
+signal = "LORA_READY"
+# LORA_SKIPPED is also accepted as a valid completion signal.
+skip_signal = "LORA_SKIPPED"
+timeout_ms = 10000
+required = false
+depends_on = ["MODEL_PROFILE_READY"]
+
+[boot.subsystems.ctp]
+signal = "CTP_READY"
+timeout_ms = 5000
+required = true
+depends_on = ["MEMORY_ENGINE_READY", "MODEL_PROFILE_READY"]
+
+[boot.subsystems.ui]
+signal = "UI_READY"
+timeout_ms = 5000
+# UI is spawned on demand, not at boot. Not required for SENA_READY.
+required = false
+depends_on = ["CTP_READY"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Process Supervision
+# ─────────────────────────────────────────────────────────────────────────────
+# PRD §10.2: 3 retries with exponential backoff.
+# Exact policy: immediate → 5s → 30s → degraded mode.
+
+[supervisor]
+max_retries = 3
+
+# Backoff durations in milliseconds for each retry attempt.
+# Index 0 = first retry (immediate), index 1 = second retry, index 2 = third retry.
+# After all retries exhausted, the subsystem enters degraded mode.
+backoff_ms = [0, 5000, 30000]
+
+# How long to wait after spawning a process before considering it a failed start.
+# This is separate from boot signal timeouts — this covers the process itself
+# failing to stay alive (crash on launch).
+process_start_grace_ms = 2000
+
+# Definitions of each supervised subsystem and how to spawn it.
+# command and args are OS-specific — these are Windows defaults.
+
+[supervisor.subsystems.memory_engine]
+subsystem_id = "memory_engine"
+command = "memory-engine"
+args = []
+working_directory = "../memory-engine"
+
+[supervisor.subsystems.agents]
+subsystem_id = "agents"
+command = "uv"
+args = ["run", "python", "-m", "sena_agents"]
+working_directory = "../agents"
+
+[supervisor.subsystems.platform]
+subsystem_id = "platform"
+command = "dotnet"
+args = ["run", "--project", "../platform/windows"]
+working_directory = "../platform/windows"
+
+[supervisor.subsystems.ui]
+subsystem_id = "ui"
+command = "sena-ui"
+args = []
+working_directory = "../ui"
+# UI is spawned on demand, not at boot.
+spawn_at_boot = false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Priority Arbitration
+# ─────────────────────────────────────────────────────────────────────────────
+# PRD §9.3: Tier 2 is exclusive. Escalations are time-bounded.
+# Reactive loop always wins over CTP for Tier 2.
+
+[arbitration]
+# Maximum duration a Tier 2 escalation can be held, in milliseconds.
+# daemon-bus enforces this ceiling regardless of what the subsystem requests.
+max_escalation_duration_ms = 30000
+
+# Default escalation duration if the requester does not specify one.
+default_escalation_duration_ms = 10000
+
+# Maximum number of queued escalation requests before new ones are denied.
+max_queue_depth = 16
+
+# Subsystem ID that is always given priority for Tier 2 over all others.
+# Per PRD §9.4: reactive loop always takes precedence over CTP.
+reactive_subsystem_id = "reactive_loop"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Watchdog
+# ─────────────────────────────────────────────────────────────────────────────
+# PRD §12.2: daemon-bus runs a watchdog timer on every dispatched agent task.
+
+[watchdog]
+# Default wall-clock timeout for agent tasks, in milliseconds.
+# Individual tasks can override this via RegisterTaskRequest.timeout_ms,
+# but this is the ceiling — no task can request more than this.
+default_task_timeout_ms = 10000
+
+# Absolute maximum timeout any task can request.
+max_task_timeout_ms = 60000
+
+# How frequently the watchdog sweeps for expired tasks, in milliseconds.
+sweep_interval_ms = 500
+
+# Maximum number of concurrently tracked tasks.
+max_tracked_tasks = 200
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────────────────────────────
+
+[logging]
+# Minimum log level: trace, debug, info, warn, error
+level = "info"
+
+# Log output format: "json" for structured production logs, "pretty" for dev.
+format = "json"

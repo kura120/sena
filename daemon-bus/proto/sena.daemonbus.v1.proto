@@ -1,0 +1,312 @@
+syntax = "proto3";
+
+package sena.daemonbus.v1;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Boot Signals
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Every subsystem signals daemon-bus when it is truly ready — not just started.
+// The boot sequence is ordered per PRD §3.2. daemon-bus tracks each signal and
+// halts boot if a required subsystem fails within its configured timeout.
+
+enum BootSignal {
+  BOOT_SIGNAL_UNSPECIFIED = 0;
+  DAEMON_BUS_READY = 1;
+  MEMORY_ENGINE_READY = 2;
+  PLATFORM_READY = 3;
+  AGENTS_READY = 4;
+  OLLAMA_READY = 5;
+  MODEL_PROFILE_READY = 6;
+  LORA_READY = 7;
+  LORA_SKIPPED = 8;
+  CTP_READY = 9;
+  UI_READY = 10;
+  SENA_READY = 11;
+}
+
+message BootSignalRequest {
+  // Which subsystem is signaling ready.
+  string subsystem_id = 1;
+  // The boot signal being emitted.
+  BootSignal signal = 2;
+}
+
+message BootSignalResponse {
+  bool acknowledged = 1;
+}
+
+message BootStatusRequest {}
+
+message BootStatusResponse {
+  // Map of subsystem_id to the boot signal it has reached.
+  map<string, BootSignal> subsystem_signals = 1;
+  // True only when all required subsystems have signaled ready and SENA_READY is emitted.
+  bool sena_ready = 2;
+}
+
+service BootService {
+  // Called by each subsystem when it is truly ready.
+  rpc SignalReady(BootSignalRequest) returns (BootSignalResponse);
+  // Query current boot status — useful for UI and diagnostics.
+  rpc GetBootStatus(BootStatusRequest) returns (BootStatusResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Event Bus
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Topic constants are defined here so generated code produces typed constants.
+// All topic strings in Rust reference these — never string literals.
+
+enum EventTopic {
+  EVENT_TOPIC_UNSPECIFIED = 0;
+
+  // Boot lifecycle
+  TOPIC_BOOT_SIGNAL = 1;
+  TOPIC_BOOT_FAILED = 2;
+
+  // Subsystem supervision
+  TOPIC_SUBSYSTEM_STARTED = 10;
+  TOPIC_SUBSYSTEM_CRASHED = 11;
+  TOPIC_SUBSYSTEM_RESTARTED = 12;
+  TOPIC_SUBSYSTEM_DEGRADED = 13;
+
+  // Priority arbitration
+  TOPIC_ESCALATION_GRANTED = 20;
+  TOPIC_ESCALATION_QUEUED = 21;
+  TOPIC_ESCALATION_EXPIRED = 22;
+  TOPIC_ESCALATION_RELEASED = 23;
+
+  // Watchdog
+  TOPIC_TASK_TIMEOUT = 30;
+  TOPIC_TASK_TERMINATED = 31;
+
+  // Memory engine events (published by memory-engine, consumed by others)
+  TOPIC_MEMORY_UPDATED = 40;
+
+  // Model probe
+  TOPIC_MODEL_PROBE_FAILED = 50;
+  TOPIC_LORA_TRAINING_RECOMMENDED = 51;
+
+  // User-facing reactive loop
+  TOPIC_USER_MESSAGE_RECEIVED = 60;
+  TOPIC_USER_MESSAGE_RESPONSE = 61;
+}
+
+message BusEvent {
+  // Unique event identifier for tracing.
+  string event_id = 1;
+  // Topic this event is published to.
+  EventTopic topic = 2;
+  // Source subsystem that emitted the event.
+  string source_subsystem = 3;
+  // Arbitrary payload — subsystem-specific, encoded as bytes.
+  // Receivers deserialize based on topic contract.
+  bytes payload = 4;
+  // OpenTelemetry trace context propagated with every cross-subsystem event.
+  string trace_context = 5;
+  // UTC timestamp in RFC 3339 format.
+  string timestamp = 6;
+}
+
+message PublishRequest {
+  BusEvent event = 1;
+}
+
+message PublishResponse {
+  bool accepted = 1;
+}
+
+message SubscribeRequest {
+  // Which topics the caller wants to receive. Empty means all topics.
+  repeated EventTopic topics = 1;
+  // Subscriber identity for logging and diagnostics.
+  string subscriber_id = 2;
+}
+
+service EventBusService {
+  // Publish an event to the bus. Fire-and-forget from the caller's perspective.
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  // Subscribe to events. Server-streaming — daemon-bus pushes matching events.
+  rpc Subscribe(SubscribeRequest) returns (stream BusEvent);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Priority Arbitration
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PriorityTier {
+  PRIORITY_TIER_UNSPECIFIED = 0;
+  CRITICAL = 1;   // Tier 0 — daemon-bus only
+  REACTIVE = 2;   // Tier 1 — user-facing requests
+  ESCALATED = 3;  // Tier 2 — time-bounded, exclusive
+  STANDARD = 4;   // Tier 3 — normal agent operation
+  BACKGROUND = 5; // Tier 4 — CTP default, telemetry
+}
+
+enum EscalationResult {
+  ESCALATION_RESULT_UNSPECIFIED = 0;
+  GRANTED = 1;
+  QUEUED = 2;
+  DENIED = 3;
+}
+
+message EscalationRequest {
+  // Which subsystem is requesting escalation.
+  string subsystem_id = 1;
+  // The tier being requested. Only ESCALATED (Tier 2) can be requested.
+  PriorityTier requested_tier = 2;
+  // Why escalation is needed — logged for debugging and CTP pattern analysis.
+  string reason = 3;
+  // Maximum duration in milliseconds the subsystem expects to need escalation.
+  // daemon-bus enforces a ceiling from config — this is a hint, not a guarantee.
+  uint64 requested_duration_ms = 4;
+  // Trace context for the operation driving this escalation.
+  string trace_context = 5;
+}
+
+message EscalationResponse {
+  EscalationResult result = 1;
+  // Unique escalation ID — used to release or track expiry.
+  string escalation_id = 2;
+  // Actual granted duration in milliseconds. May be less than requested.
+  uint64 granted_duration_ms = 3;
+}
+
+message ReleaseEscalationRequest {
+  string escalation_id = 1;
+  string subsystem_id = 2;
+}
+
+message ReleaseEscalationResponse {
+  bool released = 1;
+}
+
+message ArbitrationStatusRequest {}
+
+message ArbitrationStatusResponse {
+  // Currently held Tier 2 escalation, if any.
+  string current_tier_two_holder = 1;
+  string current_escalation_id = 2;
+  // Number of queued escalation requests.
+  uint32 queue_depth = 3;
+}
+
+service ArbitrationService {
+  // Request Tier 2 escalation. Returns GRANTED or QUEUED.
+  rpc RequestEscalation(EscalationRequest) returns (EscalationResponse);
+  // Voluntarily release an escalation before expiry.
+  rpc ReleaseEscalation(ReleaseEscalationRequest) returns (ReleaseEscalationResponse);
+  // Query current arbitration state — for diagnostics.
+  rpc GetArbitrationStatus(ArbitrationStatusRequest) returns (ArbitrationStatusResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Process Supervision
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum SubsystemState {
+  SUBSYSTEM_STATE_UNSPECIFIED = 0;
+  STARTING = 1;
+  READY = 2;
+  RUNNING = 3;
+  RESTARTING = 4;
+  DEGRADED = 5;
+  STOPPED = 6;
+  FAILED = 7;
+}
+
+message SubsystemStatus {
+  string subsystem_id = 1;
+  SubsystemState state = 2;
+  // Number of restart attempts since last successful start.
+  uint32 restart_count = 3;
+  // Last error message if state is DEGRADED or FAILED. Safe for cross-process — no debug_context.
+  string last_error = 4;
+  // Process ID if running.
+  uint64 pid = 5;
+}
+
+message SupervisorStatusRequest {}
+
+message SupervisorStatusResponse {
+  repeated SubsystemStatus subsystems = 1;
+}
+
+message RestartSubsystemRequest {
+  string subsystem_id = 1;
+  // Reason for manual restart — logged.
+  string reason = 2;
+}
+
+message RestartSubsystemResponse {
+  bool accepted = 1;
+  string message = 2;
+}
+
+service SupervisorService {
+  // Query all supervised subsystem states.
+  rpc GetStatus(SupervisorStatusRequest) returns (SupervisorStatusResponse);
+  // Manually request a subsystem restart. Follows the same retry policy.
+  rpc RestartSubsystem(RestartSubsystemRequest) returns (RestartSubsystemResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Watchdog
+// ─────────────────────────────────────────────────────────────────────────────
+
+message RegisterTaskRequest {
+  // Unique task identifier.
+  string task_id = 1;
+  // Which subsystem/agent owns this task.
+  string subsystem_id = 2;
+  // Wall-clock timeout in milliseconds. Comes from config per-agent quotas.
+  uint64 timeout_ms = 3;
+  // Trace context for the operation this task belongs to.
+  string trace_context = 4;
+}
+
+message RegisterTaskResponse {
+  bool registered = 1;
+}
+
+message CompleteTaskRequest {
+  string task_id = 1;
+}
+
+message CompleteTaskResponse {
+  bool acknowledged = 1;
+}
+
+message WatchdogStatusRequest {}
+
+message WatchdogStatusResponse {
+  // Number of currently tracked tasks.
+  uint32 active_tasks = 1;
+  // Tasks that have been terminated due to timeout since last query.
+  repeated string recently_timed_out_task_ids = 2;
+}
+
+service WatchdogService {
+  // Register a task with the watchdog. Starts the timeout timer.
+  rpc RegisterTask(RegisterTaskRequest) returns (RegisterTaskResponse);
+  // Signal task completion. Cancels the timeout timer.
+  rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
+  // Query watchdog state — for diagnostics.
+  rpc GetWatchdogStatus(WatchdogStatusRequest) returns (WatchdogStatusResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Structured Error — Cross-Process Safe
+// ─────────────────────────────────────────────────────────────────────────────
+
+// This mirrors the Rust SenaError but only carries fields safe for cross-process
+// propagation. debug_context is never included — it stays local to the originating subsystem.
+
+message SenaErrorProto {
+  // Machine-readable error code.
+  string code = 1;
+  // Human-readable message. Never contains prompt content, SoulBox values, or user data.
+  string message = 2;
+}
