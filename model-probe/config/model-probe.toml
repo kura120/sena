@@ -1,0 +1,182 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# model-probe configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Every threshold, timeout, scoring weight, and tunable value used by
+# model-probe lives here. Nothing is hardcoded in source.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# daemon-bus gRPC connection
+# ─────────────────────────────────────────────────────────────────────────────
+
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+# How long to wait for the initial connection to daemon-bus before giving up.
+connect_timeout_ms = 5000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+[model]
+# Path to the GGUF model file loaded by llama-cpp-rs.
+model_path = "models/default.gguf"
+# Number of GPU layers to offload. 0 = CPU-only, 99 = all layers.
+gpu_layers = 99
+# Advertised context length of the model in tokens. Used as an upper bound
+# for context window probing — never trusted as the actual usable limit.
+advertised_context_length = 8192
+# Seed for deterministic probe inference. Fixed to ensure reproducibility.
+seed = 42
+# Maximum tokens any single probe inference may generate.
+max_probe_tokens = 256
+# Temperature override for all probe inferences. Must be 0.0 for
+# deterministic, reproducible results.
+temperature = 0.0
+# Model architecture families known to support LoRA adapter training.
+# Used by the LoRA compatibility probe — structural check, not inference.
+lora_compatible_architectures = [
+    "llama",
+    "mistral",
+    "qwen",
+    "qwen2",
+    "gemma",
+    "gemma2",
+    "phi",
+    "phi3",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hardware tier thresholds (VRAM in MB)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[hardware]
+# VRAM boundary in MB. Below this → Low tier.
+low_tier_vram_ceiling_mb = 8192
+# VRAM boundary in MB. At or above this → High tier. Between the two → Mid.
+high_tier_vram_floor_mb = 16384
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global probe settings
+# ─────────────────────────────────────────────────────────────────────────────
+
+[probes]
+# Overall timeout in milliseconds for the entire probe battery.
+battery_timeout_ms = 30000
+# Maximum wall-clock time for any single probe in milliseconds.
+# If a probe exceeds this, it is terminated and scored as CapabilityLevel::None / 0.0.
+per_probe_timeout_ms = 5000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Context window probe
+# ─────────────────────────────────────────────────────────────────────────────
+
+[probes.context_window]
+# Known token sequence repeated to measure maximum reliable context length.
+probe_token_sequence = "The quick brown fox jumps over the lazy dog."
+# Test retention at these fractions of the advertised context window.
+retention_test_fractions = [0.25, 0.50, 0.75]
+# Fraction subtracted from the highest passing retention level to derive
+# pre_rot_threshold. E.g. 0.10 = 10% safety margin below measured limit.
+safety_margin_fraction = 0.10
+# Expected answer fragment that the model must reproduce to pass each
+# retention test level.
+expected_answer = "lazy dog"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Structured output probe
+# ─────────────────────────────────────────────────────────────────────────────
+
+[probes.structured_output]
+# Prompt requesting a minimal KnowledgeGraph structured output.
+probe_prompt = "Extract entities and relations from the following sentence. Return ONLY valid JSON matching the schema, no other text.\n\nSentence: 'Alice works at Acme Corp in Paris.'\n\nSchema: {\"entities\": [{\"name\": string, \"type\": string}], \"relations\": [{\"source\": string, \"target\": string, \"relation\": string}]}"
+# JSON schema string used to validate the model's structured output.
+expected_schema = '{"type":"object","required":["entities","relations"],"properties":{"entities":{"type":"array","items":{"type":"object","required":["name","type"],"properties":{"name":{"type":"string"},"type":{"type":"string"}}}},"relations":{"type":"array","items":{"type":"object","required":["source","target","relation"],"properties":{"source":{"type":"string"},"target":{"type":"string"},"relation":{"type":"string"}}}}}}'
+# Minimum fraction of schema fields present for CapabilityLevel::Partial.
+partial_threshold = 0.50
+# Minimum fraction of schema fields present for CapabilityLevel::Full.
+full_threshold = 0.90
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Instruction following probe
+# ─────────────────────────────────────────────────────────────────────────────
+
+[probes.instruction_following]
+# Multi-step instruction prompt with a precise expected format.
+probe_prompt = "Follow these instructions exactly:\n1. Write the word 'ALPHA' on the first line\n2. Write the number 7 on the second line\n3. Write the word 'END' on the third line\nOutput only these three lines, nothing else."
+# The exact expected output for scoring.
+expected_output = "ALPHA\n7\nEND"
+# Score at or above which the capability is Partial.
+partial_threshold = 0.50
+# Score at or above which the capability is Full.
+full_threshold = 0.90
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reasoning quality baseline probe
+# ─────────────────────────────────────────────────────────────────────────────
+
+[probes.reasoning]
+# Chain-of-thought problem with a known correct answer.
+probe_prompt = "A farmer has 15 sheep. All but 8 die. How many sheep are left alive? Think step by step, then give the final answer as a single number on the last line."
+# The known correct final answer to extract and compare.
+expected_answer = "8"
+# Keywords or reasoning steps expected in the chain-of-thought.
+# Each matched step contributes to the coherence score.
+expected_reasoning_steps = ["all but 8", "8 sheep remain", "8"]
+# Score at or above which reasoning quality is considered acceptable.
+quality_threshold = 0.60
+answer_weight = 0.60
+reasoning_steps_weight = 0.40
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reasoning gap detection
+# ─────────────────────────────────────────────────────────────────────────────
+
+[probes.reasoning_gap]
+# If (last_trained_score - current_score) exceeds this, publish
+# LORA_TRAINING_RECOMMENDED. Only fires when the model is LoRA-compatible.
+trigger_threshold = 0.15
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LoRA compatibility probe
+# ─────────────────────────────────────────────────────────────────────────────
+
+[probes.lora_compat]
+# Model metadata key inspected to determine architecture family.
+# This is a structural check — not an inference call.
+architecture_metadata_key = "general.architecture"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Memory injection fidelity probe
+# ─────────────────────────────────────────────────────────────────────────────
+
+[probes.memory_fidelity]
+# A known fact injected into context for the model to reason about.
+injected_fact = "Project Zenith's deadline is March 15, 2025, and its lead engineer is Dr. Ravi Patel."
+# The question posed about the injected fact.
+probe_prompt = "Based on the context above, when is Project Zenith's deadline and who is the lead engineer?"
+# The expected answer derived from the injected fact.
+expected_answer = "March 15, 2025, Dr. Ravi Patel"
+# Score at or above which memory injection fidelity is considered passing.
+pass_threshold = 0.70
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Graph extraction capability probe
+# ─────────────────────────────────────────────────────────────────────────────
+
+[probes.graph_extraction]
+# Prompt requesting a minimal KnowledgeGraph structured output.
+probe_prompt = "Extract a knowledge graph from the following sentence. Return ONLY valid JSON with 'nodes' (list of {id, label, type}) and 'edges' (list of {source, target, relation}), no other text.\n\nSentence: 'Marie Curie discovered radium in 1898 at the University of Paris.'"
+# JSON schema for validating the graph extraction output.
+expected_schema = '{"type":"object","required":["nodes","edges"],"properties":{"nodes":{"type":"array","items":{"type":"object","required":["id","label","type"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"type":{"type":"string"}}}},"edges":{"type":"array","items":{"type":"object","required":["source","target","relation"],"properties":{"source":{"type":"string"},"target":{"type":"string"},"relation":{"type":"string"}}}}}}'
+# Minimum fraction of schema fields for CapabilityLevel::Partial.
+partial_threshold = 0.50
+# Minimum fraction of schema fields for CapabilityLevel::Full.
+full_threshold = 0.90
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────────────────────────────
+
+[logging]
+level = "info"
+format = "pretty"

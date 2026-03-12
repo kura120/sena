@@ -1,0 +1,49 @@
+[package]
+name = "model-probe"
+version = "0.1.0"
+edition = "2021"
+description = "Sena runtime model capability detection — probes the active model at boot and publishes profiles to daemon-bus"
+publish = false
+
+[[bin]]
+name = "model-probe"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# gRPC client
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+# Serialization and config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Error handling
+thiserror = "2"
+
+# Unique identifiers for event publishing
+uuid = { version = "1", features = ["v4"] }
+
+# Hardware detection — NVIDIA GPU info (VRAM, CUDA compute capability)
+nvml-wrapper = "0.10"
+
+# Hardware detection — system RAM
+sysinfo = "0.32"
+
+# Timestamp handling
+chrono = { version = "0.4", features = ["serde"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
