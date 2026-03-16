@@ -4,7 +4,9 @@ applyTo: "memory-engine/**"
 
 # memory-engine — Copilot Instructions
 
-memory-engine is the Rust concurrent memory system. It owns all memory reads, writes, and tier management. It is never idle — multiple subsystems read and write simultaneously at all times. It owns its own concurrency entirely. daemon-bus never coordinates memory access.
+memory-engine is the Sena-specific integration layer that wires ech0 to llama-cpp-rs and daemon-bus. It owns all memory reads, writes, and tier management. It is never idle — multiple subsystems read and write simultaneously. It owns its own concurrency entirely. daemon-bus never coordinates memory access.
+
+The sole backend is ech0 (`Store`, `Embedder`, `Extractor`). There is no Python layer. There is no external process. There is no network call.
 
 These rules are traps specific to this subsystem. Global rules in `.github/copilot-instructions.md` also apply in full.
 
@@ -15,223 +17,249 @@ These rules are traps specific to this subsystem. Global rules in `.github/copil
 memory-engine owns:
 - All memory reads and writes across all tiers (short-term, long-term, episodic)
 - RwLock management per tier
-- The internal priority queue for read/write ordering
-- Memory weighting and relevance decay
+- The internal priority write queue
+- Memory weighting and relevance decay (via ech0's `importance-decay` feature)
 - Broadcasting state change events to daemon-bus after writes complete
+- Implementing `Embedder` and `Extractor` traits for ech0 backed by llama-cpp-rs
+- Deriving `StoreConfig` from `ModelCapabilityProfile` (profile.rs)
 
 memory-engine does not own:
-- Deciding what to store — that is the responsibility of the calling subsystem
+- Deciding what to store — that is the calling subsystem's responsibility
 - Deciding what is relevant — relevance scoring belongs to CTP
-- Prompt assembly — that is prompt-composer
-- SoulBox state — that is soulbox
+- Prompt assembly — that belongs to prompt-composer
+- SoulBox state — that belongs to soulbox
+- ech0 internals — never reach past the public API (`Store`, traits, schema types)
 
-If you find yourself writing relevance logic or prompt assembly logic inside memory-engine, stop. memory-engine stores and retrieves. It does not reason.
+If you find yourself writing relevance logic or prompt assembly inside memory-engine, stop. memory-engine stores and retrieves. It does not reason.
+
+---
+
+## ech0 Integration
+
+### Entry Point
+```rust
+use ech0::{Store, StoreConfig};
+
+let store = Store::new(config, embedder, extractor).await?;
+```
+
+`Store` is the only ech0 type that memory-engine constructs directly. All other ech0 types (`Node`, `Edge`, `SearchResult`, `IngestResult`, etc.) are read-only outputs — never construct them manually.
+
+### Traits memory-engine Must Implement
+```rust
+// In embedder.rs — backed by llama-cpp-rs
+impl Embedder for LlamaEmbedder {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, EchoError>;
+}
+
+// In extractor.rs — backed by llama-cpp-rs structured output
+impl Extractor for LlamaExtractor {
+    async fn extract(&self, text: &str) -> Result<ExtractionResult, EchoError>;
+}
+```
+
+Both traits require `Send + Sync`. Both return `EchoError` — not `SenaError`. The conversion to `SenaError` happens at the call site in `engine.rs`, never inside the trait impl.
+
+### Features Enabled in Sena
+```toml
+ech0 = { path = "../ech0", features = ["dynamic-linking", "importance-decay", "provenance", "contradiction-detection"] }
+```
+
+All four features are always enabled. Never conditionalize code on whether these features are present.
+
+### EchoError Is Never Propagated Raw
+
+Every `EchoError` returned by ech0 must be mapped to `SenaError` at the engine.rs call site before it leaves memory-engine's internal layer.
+```rust
+// bad — propagates EchoError outside engine boundary
+pub async fn write(&self, entry: MemoryEntry) -> Result<(), EchoError> { ... }
+
+// good — maps at the boundary
+pub async fn write(&self, entry: MemoryEntry, priority: Priority) -> Result<(), SenaError> {
+    self.store.ingest_text(&entry.text).await.map_err(SenaError::from)?;
+    ...
+}
+```
+
+---
+
+## Profile Derivation (profile.rs)
+
+memory-engine receives `ModelCapabilityProfile` from daemon-bus at boot. `profile.rs` derives `StoreConfig` from it. This is the only place where capability-conditional logic lives.
+
+Rules:
+- `graph_extraction == CapabilityLevel::None` → disable `DynamicLinkingConfig`
+- `structured_output == CapabilityLevel::None` → log a `warn`, set `degraded_extractor: bool` flag on `ProfileDerivedConfig` — do not silently proceed as if extraction works
+- `pre_rot_threshold` drives `MemoryConfig` context budget
+- `reasoning_quality` drives `ContradictionConfig` sensitivity (higher quality = stricter conflict detection)
+
+Returns `ProfileDerivedConfig`, not `StoreConfig` directly. All derived values logged at `debug` level — field names and values only, no content.
 
 ---
 
 ## Concurrency Traps
 
 ### RwLock Per Tier — Never One Lock for All
-Each memory tier (short-term, long-term, episodic) has its own `RwLock`. Never use a single lock across all tiers — this serializes all memory operations and kills performance.
-
 ```rust
-// bad — one lock for everything
+// bad
 struct MemoryEngine {
     lock: RwLock<AllTiers>,
 }
 
-// good — one lock per tier
+// good
 struct MemoryEngine {
     short_term: RwLock<ShortTermTier>,
     long_term: RwLock<LongTermTier>,
     episodic: RwLock<EpisodicTier>,
+    store: Arc<Store>,
+    queue: Arc<WriteQueue>,
+    bus: Arc<DaemonBusClient>,
+    config: Arc<Config>,
 }
 ```
 
-### Reactive Reads Always Preempt CTP Writes
-The internal priority queue must always serve reactive read requests before CTP background writes. Never implement a FIFO queue — priority must be respected.
-
+### Reactive Reads Always Preempt Background Writes
 ```rust
 // bad — FIFO ignores priority
 queue.push_back(request);
 
-// good — priority-aware insertion
+// good
 match request.priority {
     Priority::Reactive => queue.push_front(request),
     Priority::Background => queue.push_back(request),
 }
 ```
 
-### Never Hold a Write Lock During an Async Await
-Holding a write lock across an await point blocks all readers for the duration of the async operation. Always complete the write synchronously within the lock scope.
-
+### Never Hold a Write Lock Across an Async Await
 ```rust
-// bad — holds write lock across await
+// bad
 let mut guard = self.long_term.write().await;
-let result = external_call().await; // lock held here!
-guard.insert(key, result);
+let result = self.store.ingest_text(&text).await?; // lock held here
 
-// good — await outside the lock
-let result = external_call().await;
+// good
+let result = self.store.ingest_text(&text).await?;
 let mut guard = self.long_term.write().await;
 guard.insert(key, result);
 ```
 
 ### daemon-bus Is Never Involved in Memory Coordination
-daemon-bus receives broadcast events after memory state changes. It never grants locks, coordinates writes, or arbitrates memory access. If you find yourself calling into daemon-bus from inside a lock scope, stop.
+
+daemon-bus receives broadcast events after memory state changes complete. It never grants locks, coordinates writes, or arbitrates memory access. Never call into daemon-bus from inside a lock scope.
 
 ---
 
-## Memory Tool Stack
+## Write Queue (queue.rs)
 
-memory-engine integrates three tools. Each has a specific role — never use one where another applies.
+All `store.ingest_text()` calls are serialized through the async write queue in `queue.rs`. No subsystem calls ech0 directly.
 
-| Tool | Role | Wrong use |
-|---|---|---|
-| Cognee | Vector storage and semantic retrieval — what Sena knows | Never rely on Cognee's graph layer for episodic ordering — use LadybugDB instead |
-| LadybugDB | Graph layer — entity relationships, `NEXT_EVENT` edges, episodic sequence ordering | Never use for vector/semantic search |
-| SQLite | Telemetry, agent state, SoulBox schema — used internally by Cognee | Never use for vector search or graph traversal |
+The queue enforces:
+- Sequential ech0 ingest calls — never concurrent
+- Priority ordering — Reactive at front, Background at back
+- Max depth from config — returns `ErrorCode::QueueFull` if exceeded
+- Per-item bounded timeout (`operation_timeout_ms` from config) — returns `ErrorCode::QueueTimeout`
+- Retry on transient `EchoError` — up to `max_attempts` with `backoff_ms` spacing
 
-LanceDB is embedded inside Cognee and is not a direct integration point for memory-engine. Do not import or call LanceDB directly — always go through Cognee's API.
-
----
-
-## Cognee Integration Traps
-
-These are confirmed failure modes discovered during the Cognee spike. Every trap here has a reproduction case in `spikes/README.md`.
-
-### cognee.add() Is Not Safe for Concurrent Calls
-Cognee's `add()` internally calls `reset_dataset_pipeline_run_status()` which does an unguarded SQLite read-modify-write on the pipeline-run table. Concurrent calls race on that row and produce `list index out of range` deep in the pipeline layer. memory-engine's internal write queue serializes all Cognee adds — this is architecturally correct and must never be bypassed.
-
+The drain task `JoinHandle` must be stored — never silently dropped.
 ```rust
-// bad — concurrent adds race on SQLite pipeline table
-tokio::join!(
-    cognee_add(fact_a),
-    cognee_add(fact_b),
-);
+// bad
+tokio::join!(store.ingest_text(a), store.ingest_text(b));
 
-// good — write queue serializes all Cognee calls
-write_queue.enqueue(fact_a).await?;
-write_queue.enqueue(fact_b).await?;
+// good
+write_queue.enqueue(entry_a, Priority::Background).await?;
+write_queue.enqueue(entry_b, Priority::Background).await?;
 ```
-
-### cognee.search() Is Not Safe for Concurrent Calls
-Cognee's `search()` writes results back to a SQLite cache table. Concurrent searches cause simultaneous INSERTs that hit a write lock — SQLite's default journal mode has no WAL. The reactive loop fires one search at a time, which is the correct production pattern. Never parallelize Cognee searches.
-
-### cognify() Background Writes Outlive the Coroutine
-`cognify()` returns before all background SQLite writes (token_count updates via SQLAlchemy autoflush) complete. Any Cognee operation immediately following `cognify()` may race against those writes and hit `database is locked`. In production this is not an issue because CTP's write queue naturally spaces operations. Never call `cognify()` and immediately follow it with another Cognee operation in a tight loop.
-
-### Cold Start Must Seed Before Searching
-After `prune_data()` + `prune_system()`, Cognee wipes the user and dataset records entirely. A subsequent `search()` call with no prior `add()` throws `SearchPreconditionError: no database/default user found`. memory-engine's cold start boot sequence must always call `add()` + `cognify()` with at least one seed record before opening the reactive loop for searches.
-
-### Never Rely on Cognee's Graph Layer for Episodic Ordering
-Cognee's internal graph extraction prompt (as of 0.5.x) does not instruct the LLM to include the `name` field required by its own `KnowledgeGraph` Pydantic schema. Graph extraction fails validation on every generation attempt with local models. A patched prompt is maintained in `.venv` — see `spikes/README.md` for the patch and the upstream PR. Until the fix is merged into Cognee's official release, do not architect any feature that depends on Cognee's graph layer for correctness. Episodic ordering is owned by LadybugDB exclusively.
 
 ---
 
 ## Memory Tier Traps
 
 ### Short-Term Is Volatile — Never Persist It Directly
-Short-term memory is session-scoped. Never write short-term memory to disk directly. CTP is responsible for promoting short-term entries to long-term during consolidation. memory-engine executes the promotion when instructed — it does not decide when to promote.
 
-### Episodic Sequences Require Explicit NEXT_EVENT Edges in LadybugDB
-Never rely on Cognee's chunker proximity to preserve episodic ordering. If the session-log text is split across chunk boundaries, the before/middle/after steps of a sequence end up in separate chunks with no ordering relationship between them. Episodic sequences must be stored with explicit ordering metadata in LadybugDB:
+Short-term memory is session-scoped. CTP decides when to promote to long-term. memory-engine executes the promotion — it never decides when.
 
-- Each step is a separate graph node
-- Nodes carry `(session_id, step_index)` as a composite key
-- Adjacent steps are connected by `NEXT_EVENT` edges
-- Cognee stores the raw text for semantic retrieval; LadybugDB stores the ordered structure for sequence reconstruction
+### Episodic Tier Is Append-Only
 
+Never mutate or delete an existing episodic entry. Corrections are new entries. `EpisodicTier` exposes no `update` or `delete` methods — enforced by the type.
+
+### Weight Decay Must Have a Floor
 ```rust
-// bad — relying on Cognee chunker to preserve sequence
-cognee_add("Step 1 ... Step 2 ... Step 3 ...").await?;
-
-// good — explicit ordering in LadybugDB
-for (idx, step) in steps.iter().enumerate() {
-    cognee_add(&step.text).await?;
-    ladybug_create_node(session_id, idx, &step).await?;
-    if idx > 0 {
-        ladybug_create_edge(session_id, idx - 1, idx, "NEXT_EVENT").await?;
-    }
-}
-```
-
-### Episodic Writes Are Append-Only
-Never mutate or delete an existing episodic memory entry. Episodic memory is a log of what happened. Corrections are new entries, not edits.
-
-```rust
-// bad — mutates existing episode
-episode.update(new_data);
-
-// good — appends a correction entry
-episodic_tier.append(EpisodeEntry::correction(original_id, new_data));
-```
-
-### Weight Decay Must Be Bounded
-Memory weighting decays over time. The decay function must have a minimum floor — never let a weight reach zero through decay alone. A memory can only be fully removed by an explicit delete operation, never by decay.
-
-```rust
-// bad — weight can reach zero
+// bad
 weight *= decay_factor;
 
-// good — floor prevents zero
-weight = (weight * decay_factor).max(MIN_WEIGHT_FLOOR);
+// good
+weight = (weight * decay_factor).max(config.decay.floor);
 ```
 
 ---
 
-## Cognee Write Queue
+## Event Broadcasting
 
-memory-engine owns an internal async write queue that serializes all Cognee operations. This queue is the single point of contact between memory-engine and Cognee. No subsystem calls Cognee directly — all writes go through the queue.
-
-The write queue enforces:
-- Sequential `cognee.add()` calls — never concurrent
-- Minimum spacing between operations — mirrors CTP's natural operation spacing
-- Retry on transient SQLite lock errors with bounded backoff
-- Drain detection after `cognify()` — polls until SQLite accepts a probe write before proceeding
-
-CTP, the reactive loop, and all agents submit write requests to the queue. The queue owns the Cognee session lifecycle.
-
----
-
-## Event Broadcasting Traps
-
-### Broadcast After Write Completes — Never During
-Always release the write lock before broadcasting a state change event to daemon-bus. Never broadcast while holding a lock.
-
+Always release the write lock before broadcasting to daemon-bus.
 ```rust
 // bad — broadcasts while holding lock
 let mut guard = self.long_term.write().await;
 guard.insert(key, value);
-self.bus.publish(events::MEMORY_UPDATED, payload).await?; // lock still held
+self.bus.publish(TOPIC_MEMORY_WRITE_COMPLETED, payload).await?;
 
-// good — release lock first
+// good
 {
     let mut guard = self.long_term.write().await;
     guard.insert(key, value);
-} // lock released here
-self.bus.publish(events::MEMORY_UPDATED, payload).await?;
+}
+self.bus.publish(TOPIC_MEMORY_WRITE_COMPLETED, payload).await?;
 ```
+
+Events:
+- `TOPIC_MEMORY_WRITE_COMPLETED` — after every successful write
+- `TOPIC_MEMORY_TIER_PROMOTED` — after every short-term → long-term promotion
+
+---
+
+## Error Handling
+```rust
+struct SenaError {
+    code: ErrorCode,
+    message: String,
+    debug_context: Option<DebugContext>,  // never crosses gRPC boundary
+}
+```
+
+- `debug_context` always stripped before any gRPC response
+- `message` never contains raw text, user messages, or memory content — only operation names and error codes
+- No silent failures — every `EchoError` mapped to `SenaError` before leaving engine.rs
+
+ErrorCode variants: `StorageFailure`, `EmbedderFailure`, `ExtractorFailure`, `ProfileMissing`, `ProfileInvalid`, `QueueFull`, `QueueTimeout`, `BootTimeout`, `GrpcFailure`, `ConfigLoadFailure`.
 
 ---
 
 ## Logging
 
-Use the `tracing` crate exclusively. Required fields on every memory operation log:
+`tracing` crate only. No `println!`, no `eprintln!`.
 
-- `tier` — which memory tier was accessed
-- `operation` — read, write, promote, deprecate
-- `priority` — reactive or background
-- `duration_ms` — how long the operation took
+Required fields on every memory operation:
+- `tier` — short_term, long_term, episodic
+- `operation` — read, write, promote
+- `priority` — reactive, background
+- `duration_ms`
 
-```rust
-tracing::debug!(
-    tier = "long_term",
-    operation = "write",
-    priority = "background",
-    duration_ms = elapsed.as_millis(),
-    "memory write completed"
-);
+Operations exceeding 100ms logged at `warn` regardless of priority.
+
+Never log: memory entry content, raw ingest text, user messages, model output, SoulBox values.
+
+---
+
+## Boot Sequence
+```
+1. Load config from memory-engine.toml
+2. Initialize tracing
+3. Receive ModelCapabilityProfile from daemon-bus
+4. Derive ProfileDerivedConfig (profile.rs)
+5. Construct LlamaEmbedder and LlamaExtractor
+6. Initialize ech0 Store
+7. Initialize MemoryEngine
+8. Start gRPC server (MemoryService)
+9. Signal MEMORY_ENGINE_READY to daemon-bus
+10. Await shutdown signal
 ```
 
-Slow operations (> 100ms) must be logged at `warn` level regardless of priority.
+Any failure in steps 1–8 is fatal. Log error code + subsystem name, signal failure to daemon-bus, exit non-zero.

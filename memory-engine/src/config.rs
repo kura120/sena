@@ -174,6 +174,9 @@ pub struct RetryConfig {
 pub struct EmbedderConfig {
     /// Path to the GGUF model file used for embedding generation.
     pub model_path: String,
+    /// Embedding output dimensionality — must match the GGUF model's embedding
+    /// output dimension. There is no default; missing field is a `ConfigLoadFailure`.
+    pub embedding_dim: usize,
     /// Number of texts to batch in a single embedding call.
     pub batch_size: u32,
     /// Number of GPU layers to offload.
@@ -255,6 +258,7 @@ backoff_ms = 500
 
 [embedder]
 model_path = "models/embedding.gguf"
+embedding_dim = 768
 batch_size = 32
 gpu_layers = 99
 
@@ -296,6 +300,7 @@ slow_operation_threshold_ms = 100
         assert_eq!(config.queue.retry.max_attempts, 3);
         assert_eq!(config.queue.retry.backoff_ms, 500);
         assert_eq!(config.embedder.model_path, "models/embedding.gguf");
+        assert_eq!(config.embedder.embedding_dim, 768);
         assert_eq!(config.embedder.batch_size, 32);
         assert_eq!(config.embedder.gpu_layers, 99);
         assert_eq!(config.extractor.model_path, "models/default.gguf");

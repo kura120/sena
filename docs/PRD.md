@@ -1343,8 +1343,8 @@ Every subsystem ships with its own test suite. The following testing strategies 
 
 ### Phase 1 — Foundation (Current)
 - [x] daemon-bus — root process, gRPC server, event bus, priority arbitrator
-- [ ] ech0 — local-first knowledge graph memory crate (consumed by memory-engine)
-- [ ] memory-engine — concurrent tiered memory system
+- [x] ech0 — local-first knowledge graph memory crate (consumed by memory-engine)
+- [x] memory-engine — concurrent tiered memory system
 - [ ] CTP — continuous thought processing, relevance evaluator, thought queue
 - [ ] prompt-composer — dynamic prompt assembly, TOON encoding pipeline
 - [ ] SoulBox schema definition + migration system
