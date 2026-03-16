@@ -1,0 +1,116 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# memory-engine configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Every threshold, timeout, and tunable value used by memory-engine lives here.
+# Nothing is hardcoded in source. Defaults are sized for a GTX 1660 Ti / 6 GB
+# VRAM machine running a 7B-parameter GGUF model.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# daemon-bus gRPC connection
+# ─────────────────────────────────────────────────────────────────────────────
+
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+# Port on which memory-engine serves its own MemoryService gRPC server.
+listen_port = 50053
+# How long to wait for the initial connection to daemon-bus before giving up.
+connect_timeout_ms = 5000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Boot
+# ─────────────────────────────────────────────────────────────────────────────
+
+[boot]
+# Maximum time to wait for the entire boot sequence (config → store init →
+# gRPC server start → MEMORY_ENGINE_READY signal) before aborting.
+ready_signal_timeout_ms = 15000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Memory tiers
+# ─────────────────────────────────────────────────────────────────────────────
+
+[tier.short_term]
+# Maximum number of entries held in the volatile short-term tier.
+# Session-scoped — cleared on shutdown. Kept small to stay within VRAM budget.
+max_entries = 256
+
+[tier.long_term]
+# Maximum number of entries in the persistent long-term tier.
+# Bounded to limit disk and index size on a 6 GB VRAM machine.
+max_entries = 10000
+
+[tier.episodic]
+# Maximum number of entries in the append-only episodic tier.
+# Episodic entries are never mutated or deleted — corrections are new entries.
+max_entries = 50000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Importance decay
+# ─────────────────────────────────────────────────────────────────────────────
+
+[decay]
+# Multiplicative decay factor applied per decay cycle (0.0–1.0).
+# Lower values decay faster. 0.95 means 5% reduction per cycle.
+rate = 0.95
+# Absolute minimum weight. No entry ever decays below this value —
+# prevents zero-weight ghosts that consume storage but never surface.
+floor = 0.05
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Write queue
+# ─────────────────────────────────────────────────────────────────────────────
+
+[queue]
+# Maximum number of pending write operations before QueueFull is returned.
+# Sized to absorb bursts without unbounded growth.
+max_depth = 512
+# Maximum wall-clock time in milliseconds for a single queued operation
+# to complete (from enqueue to ingest_text return). Exceeding this returns
+# QueueTimeout to the caller.
+operation_timeout_ms = 10000
+
+[queue.retry]
+# Maximum number of retry attempts on transient EchoError before giving up.
+max_attempts = 3
+# Delay in milliseconds between retry attempts. Applied as flat backoff.
+backoff_ms = 500
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Embedder (llama-cpp-rs)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[embedder]
+# Path to the GGUF model file used for embedding generation.
+model_path = "models/embedding.gguf"
+# Number of texts to batch in a single embedding call. Higher values use
+# more VRAM. 32 is conservative for 6 GB VRAM with a 7B model.
+batch_size = 32
+# Number of GPU layers to offload for the embedding model.
+# 99 = offload everything the card can hold.
+gpu_layers = 99
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extractor (llama-cpp-rs)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[extractor]
+# Path to the GGUF model file used for graph/entity extraction.
+# May be the same model as the embedder or a separate smaller model.
+model_path = "models/default.gguf"
+# Number of GPU layers to offload for the extractor model.
+gpu_layers = 99
+# Maximum tokens the extractor may generate per extraction call.
+max_tokens = 512
+# Temperature for extraction inference. 0.0 for deterministic output.
+temperature = 0.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────────────────────────────
+
+[logging]
+level = "info"
+format = "pretty"
+# Threshold in milliseconds above which any memory operation is logged at
+# warn level regardless of its configured priority.
+slow_operation_threshold_ms = 100

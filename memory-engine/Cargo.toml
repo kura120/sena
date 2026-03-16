@@ -1,0 +1,59 @@
+[package]
+name = "memory-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Sena memory subsystem — integration layer wiring ech0 to llama-cpp-rs and daemon-bus"
+publish = false
+
+[[bin]]
+name = "memory-engine"
+path = "src/main.rs"
+
+[dependencies]
+# Local-first knowledge graph + vector memory backend
+ech0 = { git = "https://github.com/kura120/ech0", tag = "v0.1.0", features = [
+    "dynamic-linking",
+    "importance-decay",
+    "provenance",
+    "contradiction-detection",
+] }
+# LLM inference for Embedder + Extractor trait impls
+llama-cpp-2 = "0.1"
+
+# Required by ech0's Embedder/Extractor trait definitions (#[async_trait])
+async-trait = "0.1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# gRPC client (daemon-bus) and server (MemoryService)
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+# Serialization and config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Error handling
+thiserror = "2"
+# Top-level error handling in main.rs only
+anyhow = "1"
+
+# Unique identifiers for event publishing and entry IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Timestamp handling for event payloads
+chrono = { version = "0.4", features = ["serde"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+
+[patch.crates-io]
+usearch = { path = "third_party/usearch-2.24.0" }
