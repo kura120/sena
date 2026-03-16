@@ -205,6 +205,71 @@ pub struct WatchdogStatusResponse {
     >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryWriteRequest {
+    #[prost(string, tag = "1")]
+    pub text: ::prost::alloc::string::String,
+    /// "short_term" | "long_term" | "episodic"
+    #[prost(string, tag = "2")]
+    pub target_tier: ::prost::alloc::string::String,
+    /// "reactive" | "background"
+    #[prost(string, tag = "3")]
+    pub priority: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryWriteResponse {
+    #[prost(bool, tag = "1")]
+    pub accepted: bool,
+    #[prost(string, tag = "2")]
+    pub entry_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryReadRequest {
+    #[prost(string, tag = "1")]
+    pub query: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub limit: u32,
+    #[prost(float, tag = "3")]
+    pub min_score: f32,
+    /// "reactive" | "background"
+    #[prost(string, tag = "4")]
+    pub priority: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemorySearchResult {
+    #[prost(string, tag = "1")]
+    pub node_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub summary: ::prost::alloc::string::String,
+    #[prost(float, tag = "3")]
+    pub score: f32,
+    #[prost(string, tag = "4")]
+    pub tier: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryReadResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub results: ::prost::alloc::vec::Vec<MemorySearchResult>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryPromoteRequest {
+    #[prost(string, tag = "1")]
+    pub entry_id: ::prost::alloc::string::String,
+    /// "reactive" | "background"
+    #[prost(string, tag = "2")]
+    pub priority: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct MemoryPromoteResponse {
+    #[prost(bool, tag = "1")]
+    pub promoted: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SenaErrorProto {
     /// Machine-readable error code.
     #[prost(string, tag = "1")]
@@ -221,7 +286,6 @@ pub enum BootSignal {
     MemoryEngineReady = 2,
     PlatformReady = 3,
     AgentsReady = 4,
-    OllamaReady = 5,
     ModelProfileReady = 6,
     LoraReady = 7,
     LoraSkipped = 8,
@@ -241,7 +305,6 @@ impl BootSignal {
             Self::MemoryEngineReady => "MEMORY_ENGINE_READY",
             Self::PlatformReady => "PLATFORM_READY",
             Self::AgentsReady => "AGENTS_READY",
-            Self::OllamaReady => "OLLAMA_READY",
             Self::ModelProfileReady => "MODEL_PROFILE_READY",
             Self::LoraReady => "LORA_READY",
             Self::LoraSkipped => "LORA_SKIPPED",
@@ -258,7 +321,6 @@ impl BootSignal {
             "MEMORY_ENGINE_READY" => Some(Self::MemoryEngineReady),
             "PLATFORM_READY" => Some(Self::PlatformReady),
             "AGENTS_READY" => Some(Self::AgentsReady),
-            "OLLAMA_READY" => Some(Self::OllamaReady),
             "MODEL_PROFILE_READY" => Some(Self::ModelProfileReady),
             "LORA_READY" => Some(Self::LoraReady),
             "LORA_SKIPPED" => Some(Self::LoraSkipped),
@@ -291,6 +353,8 @@ pub enum EventTopic {
     TopicTaskTerminated = 31,
     /// Memory engine events (published by memory-engine, consumed by others)
     TopicMemoryUpdated = 40,
+    TopicMemoryWriteCompleted = 41,
+    TopicMemoryTierPromoted = 42,
     /// Model probe
     TopicModelProbeFailed = 50,
     TopicLoraTrainingRecommended = 51,
@@ -319,6 +383,8 @@ impl EventTopic {
             Self::TopicTaskTimeout => "TOPIC_TASK_TIMEOUT",
             Self::TopicTaskTerminated => "TOPIC_TASK_TERMINATED",
             Self::TopicMemoryUpdated => "TOPIC_MEMORY_UPDATED",
+            Self::TopicMemoryWriteCompleted => "TOPIC_MEMORY_WRITE_COMPLETED",
+            Self::TopicMemoryTierPromoted => "TOPIC_MEMORY_TIER_PROMOTED",
             Self::TopicModelProbeFailed => "TOPIC_MODEL_PROBE_FAILED",
             Self::TopicLoraTrainingRecommended => "TOPIC_LORA_TRAINING_RECOMMENDED",
             Self::TopicUserMessageReceived => "TOPIC_USER_MESSAGE_RECEIVED",
@@ -342,6 +408,8 @@ impl EventTopic {
             "TOPIC_TASK_TIMEOUT" => Some(Self::TopicTaskTimeout),
             "TOPIC_TASK_TERMINATED" => Some(Self::TopicTaskTerminated),
             "TOPIC_MEMORY_UPDATED" => Some(Self::TopicMemoryUpdated),
+            "TOPIC_MEMORY_WRITE_COMPLETED" => Some(Self::TopicMemoryWriteCompleted),
+            "TOPIC_MEMORY_TIER_PROMOTED" => Some(Self::TopicMemoryTierPromoted),
             "TOPIC_MODEL_PROBE_FAILED" => Some(Self::TopicModelProbeFailed),
             "TOPIC_LORA_TRAINING_RECOMMENDED" => Some(Self::TopicLoraTrainingRecommended),
             "TOPIC_USER_MESSAGE_RECEIVED" => Some(Self::TopicUserMessageReceived),
@@ -1265,6 +1333,171 @@ pub mod watchdog_service_client {
                         "GetWatchdogStatus",
                     ),
                 );
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated client implementations.
+pub mod memory_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct MemoryServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl MemoryServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> MemoryServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> MemoryServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            MemoryServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        pub async fn write(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MemoryWriteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MemoryWriteResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.MemoryService/Write",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("sena.daemonbus.v1.MemoryService", "Write"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn read(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MemoryReadRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MemoryReadResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.MemoryService/Read",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("sena.daemonbus.v1.MemoryService", "Read"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn promote(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MemoryPromoteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MemoryPromoteResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.MemoryService/Promote",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("sena.daemonbus.v1.MemoryService", "Promote"));
             self.inner.unary(req, path, codec).await
         }
     }
@@ -2557,6 +2790,290 @@ pub mod watchdog_service_server {
     /// Generated gRPC service name
     pub const SERVICE_NAME: &str = "sena.daemonbus.v1.WatchdogService";
     impl<T> tonic::server::NamedService for WatchdogServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+/// Generated server implementations.
+pub mod memory_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with MemoryServiceServer.
+    #[async_trait]
+    pub trait MemoryService: std::marker::Send + std::marker::Sync + 'static {
+        async fn write(
+            &self,
+            request: tonic::Request<super::MemoryWriteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MemoryWriteResponse>,
+            tonic::Status,
+        >;
+        async fn read(
+            &self,
+            request: tonic::Request<super::MemoryReadRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MemoryReadResponse>,
+            tonic::Status,
+        >;
+        async fn promote(
+            &self,
+            request: tonic::Request<super::MemoryPromoteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MemoryPromoteResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct MemoryServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> MemoryServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for MemoryServiceServer<T>
+    where
+        T: MemoryService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::BoxBody>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/sena.daemonbus.v1.MemoryService/Write" => {
+                    #[allow(non_camel_case_types)]
+                    struct WriteSvc<T: MemoryService>(pub Arc<T>);
+                    impl<
+                        T: MemoryService,
+                    > tonic::server::UnaryService<super::MemoryWriteRequest>
+                    for WriteSvc<T> {
+                        type Response = super::MemoryWriteResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::MemoryWriteRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MemoryService>::write(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = WriteSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/sena.daemonbus.v1.MemoryService/Read" => {
+                    #[allow(non_camel_case_types)]
+                    struct ReadSvc<T: MemoryService>(pub Arc<T>);
+                    impl<
+                        T: MemoryService,
+                    > tonic::server::UnaryService<super::MemoryReadRequest>
+                    for ReadSvc<T> {
+                        type Response = super::MemoryReadResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::MemoryReadRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MemoryService>::read(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ReadSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/sena.daemonbus.v1.MemoryService/Promote" => {
+                    #[allow(non_camel_case_types)]
+                    struct PromoteSvc<T: MemoryService>(pub Arc<T>);
+                    impl<
+                        T: MemoryService,
+                    > tonic::server::UnaryService<super::MemoryPromoteRequest>
+                    for PromoteSvc<T> {
+                        type Response = super::MemoryPromoteResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::MemoryPromoteRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MemoryService>::promote(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = PromoteSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(empty_body());
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for MemoryServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "sena.daemonbus.v1.MemoryService";
+    impl<T> tonic::server::NamedService for MemoryServiceServer<T> {
         const NAME: &'static str = SERVICE_NAME;
     }
 }

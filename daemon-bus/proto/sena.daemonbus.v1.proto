@@ -16,7 +16,8 @@ enum BootSignal {
   MEMORY_ENGINE_READY = 2;
   PLATFORM_READY = 3;
   AGENTS_READY = 4;
-  OLLAMA_READY = 5;
+  reserved 5;
+  reserved "OLLAMA_READY";
   MODEL_PROFILE_READY = 6;
   LORA_READY = 7;
   LORA_SKIPPED = 8;
@@ -84,6 +85,8 @@ enum EventTopic {
 
   // Memory engine events (published by memory-engine, consumed by others)
   TOPIC_MEMORY_UPDATED = 40;
+  TOPIC_MEMORY_WRITE_COMPLETED = 41;
+  TOPIC_MEMORY_TIER_PROMOTED = 42;
 
   // Model probe
   TOPIC_MODEL_PROBE_FAILED = 50;
@@ -138,10 +141,10 @@ service EventBusService {
 
 enum PriorityTier {
   PRIORITY_TIER_UNSPECIFIED = 0;
-  CRITICAL = 1;   // Tier 0 — daemon-bus only
-  REACTIVE = 2;   // Tier 1 — user-facing requests
-  ESCALATED = 3;  // Tier 2 — time-bounded, exclusive
-  STANDARD = 4;   // Tier 3 — normal agent operation
+  CRITICAL = 1; // Tier 0 — daemon-bus only
+  REACTIVE = 2; // Tier 1 — user-facing requests
+  ESCALATED = 3; // Tier 2 — time-bounded, exclusive
+  STANDARD = 4; // Tier 3 — normal agent operation
   BACKGROUND = 5; // Tier 4 — CTP default, telemetry
 }
 
@@ -295,6 +298,59 @@ service WatchdogService {
   rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
   // Query watchdog state — for diagnostics.
   rpc GetWatchdogStatus(WatchdogStatusRequest) returns (WatchdogStatusResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MemoryService
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── MemoryService messages ────────────────────────────────────────────────
+
+message MemoryWriteRequest {
+  string text = 1;
+  string target_tier = 2; // "short_term" | "long_term" | "episodic"
+  string priority = 3; // "reactive" | "background"
+  string trace_context = 4;
+}
+
+message MemoryWriteResponse {
+  bool accepted = 1;
+  string entry_id = 2;
+}
+
+message MemoryReadRequest {
+  string query = 1;
+  uint32 limit = 2;
+  float min_score = 3;
+  string priority = 4; // "reactive" | "background"
+  string trace_context = 5;
+}
+
+message MemorySearchResult {
+  string node_id = 1;
+  string summary = 2;
+  float score = 3;
+  string tier = 4;
+}
+
+message MemoryReadResponse {
+  repeated MemorySearchResult results = 1;
+}
+
+message MemoryPromoteRequest {
+  string entry_id = 1;
+  string priority = 2; // "reactive" | "background"
+  string trace_context = 3;
+}
+
+message MemoryPromoteResponse {
+  bool promoted = 1;
+}
+
+service MemoryService {
+  rpc Write(MemoryWriteRequest) returns (MemoryWriteResponse);
+  rpc Read(MemoryReadRequest) returns (MemoryReadResponse);
+  rpc Promote(MemoryPromoteRequest) returns (MemoryPromoteResponse);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

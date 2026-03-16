@@ -36,13 +36,6 @@ use crate::tier::{tier_name, EntryId, EpisodicTier, LongTermTier, ShortTermTier}
 // ─────────────────────────────────────────────────────────────────────────────
 // Event topic constants
 // ─────────────────────────────────────────────────────────────────────────────
-//
-// These reference the proto-generated EventTopic enum values. The proto
-// currently defines TOPIC_MEMORY_UPDATED (value 40) but does not yet have
-// separate TOPIC_MEMORY_WRITE_COMPLETED or TOPIC_MEMORY_TIER_PROMOTED.
-//
-// TODO(proto): Add TOPIC_MEMORY_WRITE_COMPLETED and TOPIC_MEMORY_TIER_PROMOTED
-// to sena.daemonbus.v1.proto. Until then, both events use TOPIC_MEMORY_UPDATED.
 
 use crate::generated::sena_daemonbus_v1::{
     event_bus_service_client::EventBusServiceClient, BusEvent, EventTopic, PublishRequest,
@@ -173,7 +166,7 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
     /// - `ErrorCode::QueueFull` if the write queue is at capacity.
     /// - `ErrorCode::QueueTimeout` if the operation times out.
     /// - `ErrorCode::StorageFailure` if ech0 `ingest_text` fails after retries.
-    pub async fn write(&self, entry: MemoryEntry, priority: Priority) -> SenaResult<()> {
+    pub async fn write(&self, entry: MemoryEntry, priority: Priority) -> SenaResult<String> {
         let start = Instant::now();
         let tier_name = entry.target_tier.as_str();
         let operation = "write";
@@ -211,7 +204,8 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
         // In a full implementation, this would come from ech0's IngestResult.
         // For now, generate a UUID — the important thing is that the tier
         // tracks which entries it owns.
-        let entry_id = EntryId::new(uuid::Uuid::new_v4().to_string());
+        let entry_id_string = uuid::Uuid::new_v4().to_string();
+        let entry_id = EntryId::new(entry_id_string.clone());
 
         // Acquire the write lock ONLY for the tier bookkeeping update.
         // This block is synchronous — no await inside.
@@ -243,10 +237,10 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
         );
 
         // Broadcast event AFTER releasing the write lock.
-        self.broadcast_event(EventTopic::TopicMemoryUpdated, "write_completed")
+        self.broadcast_event(EventTopic::TopicMemoryWriteCompleted, "write_completed")
             .await;
 
-        Ok(())
+        Ok(entry_id_string)
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -394,7 +388,7 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
         );
 
         // Step 3: Broadcast event AFTER both locks are released.
-        self.broadcast_event(EventTopic::TopicMemoryUpdated, "tier_promoted")
+        self.broadcast_event(EventTopic::TopicMemoryTierPromoted, "tier_promoted")
             .await;
 
         Ok(())

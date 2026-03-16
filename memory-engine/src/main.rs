@@ -174,10 +174,7 @@ async fn async_main() -> i32 {
         }
     };
 
-    // TODO(config): The embedding dimensionality should come from config or
-    // model metadata. For now, use a common default (768 for many GGUF models).
-    // This must match StoreConfig.store.vector_dimensions.
-    let embedding_dimensions: usize = 768;
+    let embedding_dimensions: usize = config.embedder.embedding_dim;
 
     let embedder_config = config.embedder.clone();
     let embedder_backend = Arc::clone(&llama_backend);
@@ -354,8 +351,10 @@ where
 
     tracing::info!(subsystem = SUBSYSTEM_ID, "MemoryEngine initialized");
 
-    // ── Step 8: Start gRPC server ───────────────────────────────────────
-    let _grpc_service = grpc::MemoryServiceImpl::new(Arc::clone(&engine));
+    // ── Step 8: Start gRPC server ────────────────────────────────────────────
+    use crate::generated::sena_daemonbus_v1::memory_service_server::MemoryServiceServer;
+
+    let memory_service = grpc::MemoryServiceImpl::new(Arc::clone(&engine));
     let listen_addr: std::net::SocketAddr = format!("0.0.0.0:{}", config.grpc.listen_port)
         .parse()
         .expect("listen address must be valid — config.grpc.listen_port is a u16");
@@ -367,59 +366,35 @@ where
             subsystem = SUBSYSTEM_ID,
             component = "grpc",
             listen_addr = %listen_addr,
-            "gRPC server starting"
+            "MemoryService gRPC server starting"
         );
 
-        // MemoryService is not yet in the proto, so we cannot use tonic's
-        // generated server trait. For now we run a minimal tonic server that
-        // keeps the process alive and listens on the configured port.
-        //
-        // TODO(proto): Replace this placeholder with the generated
-        // MemoryServiceServer from tonic-build once the proto is extended.
+        let serve_result = tonic::transport::Server::builder()
+            .add_service(MemoryServiceServer::new(memory_service))
+            .serve_with_shutdown(listen_addr, async {
+                let _ = shutdown_rx.await;
+                tracing::info!(
+                    subsystem = SUBSYSTEM_ID,
+                    component = "grpc",
+                    "gRPC server received shutdown signal"
+                );
+            })
+            .await;
 
-        // Graceful shutdown: wait for the shutdown signal.
-        let shutdown_future = async {
-            let _ = shutdown_rx.await;
+        if let Err(serve_error) = serve_result {
+            tracing::error!(
+                subsystem = SUBSYSTEM_ID,
+                component = "grpc",
+                error = %serve_error,
+                "gRPC server exited with error"
+            );
+        } else {
             tracing::info!(
                 subsystem = SUBSYSTEM_ID,
                 component = "grpc",
-                "gRPC server received shutdown signal"
+                "gRPC server stopped cleanly"
             );
-        };
-
-        // Use a TCP listener + graceful shutdown pattern instead of the
-        // private `serve_with_shutdown`. We bind, accept, and shut down
-        // when the signal arrives.
-        let incoming = match tokio::net::TcpListener::bind(listen_addr).await {
-            Ok(listener) => listener,
-            Err(bind_error) => {
-                tracing::error!(
-                    subsystem = SUBSYSTEM_ID,
-                    component = "grpc",
-                    error = %bind_error,
-                    "failed to bind gRPC listen address"
-                );
-                return;
-            }
-        };
-
-        tracing::info!(
-            subsystem = SUBSYSTEM_ID,
-            component = "grpc",
-            listen_addr = %listen_addr,
-            "gRPC server listening"
-        );
-
-        // Wait for shutdown — the server is placeholder-only until the proto
-        // defines MemoryService. The TCP listener keeps the port reserved.
-        shutdown_future.await;
-
-        drop(incoming);
-        tracing::info!(
-            subsystem = SUBSYSTEM_ID,
-            component = "grpc",
-            "gRPC server stopped"
-        );
+        }
     });
 
     tracing::info!(

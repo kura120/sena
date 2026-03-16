@@ -1,92 +1,42 @@
-# PLAN — ech0 API alignment fixes
+# PLAN — memory-engine gRPC server wiring
 
 ## What
 
-Fix all 72 compilation errors and 1 warning in memory-engine caused by incorrect usage of ech0's public API and llama-cpp-2's API.
+Fix 7 specific gaps in memory-engine's gRPC server layer so that MemoryService is defined in the proto, generated into both daemon-bus and memory-engine, and served by a real tonic gRPC server with full Write/Read/Promote RPC implementations.
 
 ## Why
 
-memory-engine was scaffolded before ech0 was implemented. Now that ech0 v0.1.0 is published, the actual API differs from the assumptions made during scaffolding. Every `Store`, `EchoError`, `ErrorCode`, `Embedder`, `Extractor`, `ExtractionResult`, `SearchOptions`, `StoreConfig`, and `LlamaModel` usage must be updated to match the real signatures.
+The memory-engine internals are complete and tested (69 tests passing), but the gRPC server layer is broken or absent. The proto has no MemoryService definition, the generated code has no MemoryService stubs, main.rs runs a plain TCP listener instead of a tonic server, and grpc.rs uses manual placeholder types instead of proto-generated types. These 7 fixes close the gap between the working engine and the daemon-bus integration contract.
 
 ## Subsystems Affected
 
-1. **memory-engine** — all source files touched, primary target of this work
+1. **daemon-bus** — proto source file only (sena.daemonbus.v1.proto), plus regenerated code in src/generated/
+2. **memory-engine** — config TOML, config.rs, engine.rs, profile.rs, main.rs, grpc.rs, plus regenerated code in src/generated/
 
-No other subsystems are modified. ech0 and llama-cpp-2 are consumed as dependencies — their code is not changed.
+No other subsystems are modified.
 
 ## Assumptions
 
-1. **ech0 v0.1.0 is the source of truth for all API shapes.** Verified by reading the checked-out source at `~/.cargo/git/checkouts/ech0-31079b32eefcc7fd/840dd7e/src/`. All type signatures, field names, and trait definitions are taken from there — not from memory or prior scaffolding assumptions.
+1. **ech0 v0.1.0 API is the source of truth.** `SearchResult` has fields `nodes: Vec<ScoredNode>`, `edges: Vec<ScoredEdge>`, `retrieval_path: Vec<RetrievalStep>`. `ScoredNode` has `node: Node`, `score: f32`, `source: RetrievalSource`. `Node` has `id: Uuid`, `kind: String`, `metadata: serde_json::Value`, `importance: f32`, `source_text: Option<String>` — no `summary` or `tier` field. `SearchOptions` has `limit`, `vector_weight`, `graph_weight`, `min_importance`, `tiers` — no `min_score` field.
+2. **protoc is available** on the build machine (verified).
+3. **No buf snapshot exists** — `buf breaking` cannot be run until one is created. This is noted but not blocking.
+4. **OLLAMA_READY field 5 is not in use** by any subsystem — safe to reserve.
+5. **Phase 1 does not wire the LlamaExtractor inference loop** — DegradedExtractor is always used regardless of model capability. This is an honest gate, not a bug.
+6. **The 69 existing tests do not exercise the gRPC layer** — they test engine, tier, queue, config, profile, and error internals. The grpc.rs tests use the old manual types and will be replaced.
 
-2. **`Store<E, X>` is generic over concrete `Embedder` and `Extractor` types.** ech0 does not support `Box<dyn Embedder>` or `Box<dyn Extractor>`. The existing `run_with_store<E, X>` pattern in main.rs is the correct approach — no dynamic dispatch needed.
+## Fixes in Order
 
-3. **`EchoError` has three fields: `code: ErrorCode`, `message: String`, `context: Option<ErrorContext>`.** The scaffolding was constructing `EchoError` with struct literal syntax using wrong field names and missing `message`. The convenience constructors (`EchoError::embedder_failure()`, `EchoError::extractor_failure()`) are the correct way to construct errors, with `.with_context()` for optional debug context.
-
-4. **`ErrorCode` variants in ech0 are: `StorageFailure`, `EmbedderFailure`, `ExtractorFailure`, `ConsistencyError`, `ConflictUnresolved`, `InvalidInput`, `CapacityExceeded`.** There is no `EmbeddingFailed` or `ExtractionFailed` variant. The scaffolding used wrong variant names.
-
-5. **`ExtractionResult` has no `empty()` constructor.** Construct it directly with `ExtractionResult { nodes: Vec::new(), edges: Vec::new() }`.
-
-6. **`SearchOptions` uses `limit` not `max_results`.** The `max_results` field name was a scaffolding assumption.
-
-7. **`SearchResult` does not implement `serde::Serialize`.** Cannot use `serde_json::to_string()` on it. Must manually construct the response JSON or extract fields individually.
-
-8. **`StoreConfig` has top-level fields: `store: StorePathConfig`, `memory: MemoryConfig`, `dynamic_linking: DynamicLinkingConfig`, `contradiction: ContradictionConfig`.** The scaffolding used wrong field names (`paths`, `linking`) and tried to set fields that don't exist on the structs (`enabled` on `DynamicLinkingConfig`, `sensitivity` on `ContradictionConfig`, `context_budget` on `MemoryConfig`).
-
-9. **`LlamaModel::load_from_file` takes `(&LlamaBackend, impl AsRef<Path>, &LlamaModelParams)`.** The scaffolding had the arguments in the wrong order and wrong types.
-
-10. **`LlamaModel::new_context` takes `(&LlamaBackend, LlamaContextParams)` — two arguments, not one.** The scaffolding was passing only `&context_params`.
-
-11. **`ech0::Embedder` trait requires both `embed()` and `dimensions()` methods.** The scaffolding was missing the `dimensions()` implementation. The `#[async_trait]` macro on ech0's trait definition handles lifetime desugaring — our impl must also use `#[async_trait]`.
-
-12. **The `context` field on `EchoError` is `Option<ErrorContext>`, not `ErrorContext`.** All struct literal constructions must wrap in `Some(...)`.
-
-13. **The LlamaExtractor TODO is acceptable.** The extractor inference loop (feed tokens, sample, decode, parse structured output) is deferred to Phase 2 per PRD §6.5 ("ech0 — Memory Architecture") — the extraction pipeline requires structured output prompting which is a Phase 2 capability. The `DegradedExtractor` is the V1 fallback path. The existing TODO in extractor.rs documents this correctly.
-
-14. **The gRPC server placeholder TODO is acceptable.** PRD §13.10 notes that proto definitions stabilize incrementally. The MemoryService proto message definition is a follow-up task that does not block the V1 boot sequence — the TCP listener placeholder keeps the port reserved.
-
-15. **The embedding dimensions TODO in main.rs is acceptable.** PRD §6.2 (ModelProbe) specifies that model metadata (including embedding dimensions) comes from the runtime capability profile. Until model-probe delivers dimension info, the hardcoded 768 default is the correct interim approach, documented with a TODO referencing the model-probe integration.
-
-## Changes by File
-
-### `src/main.rs`
-- Remove unused `CapabilityLevel` import
-- Remove `Box<dyn Embedder>` / `Box<dyn Extractor>` usage (already correct — `run_with_store` is generic)
-- Fix `build_store_config`: use correct `StoreConfig` field names and structure
-- Fix `connect_to_daemon_bus`: convert `tonic::transport::Error` to `SenaError` instead of `Status`
-
-### `src/embedder.rs`
-- Fix `LlamaModel::load_from_file` call: `(&backend, &model_path, &params)`
-- Fix `model.new_context`: pass `(&backend, context_params)` — two args
-- Replace all `EchoError { code: ..., context: ... }` struct literals with convenience constructors + `.with_context()`
-- Add `fn dimensions(&self) -> usize` to the `Embedder` impl
-
-### `src/extractor.rs`
-- Fix `LlamaModel::load_from_file` call: `(&backend, &model_path, &params)`
-- Fix `model.new_context`: pass `(&backend, context_params)` — two args
-- Replace all `EchoError { code: ..., context: ... }` struct literals with convenience constructors + `.with_context()`
-- Replace `ExtractionResult::empty()` with `ExtractionResult { nodes: Vec::new(), edges: Vec::new() }`
-
-### `src/error.rs`
-- Replace `ech0::ErrorCode::EmbeddingFailed` with `ech0::ErrorCode::EmbedderFailure`
-- Replace `ech0::ErrorCode::ExtractionFailed` with `ech0::ErrorCode::ExtractorFailure`
-- Fix `Option<ErrorContext>` display formatting (use `{:?}` or match on Some/None)
-
-### `src/grpc.rs`
-- Replace `max_results` with `limit` in `SearchOptions` construction
-- Remove `serde_json::to_string(&search_result)` — manually construct response JSON
-
-### `src/engine.rs`
-- All `Store` references become `Store<E, X>` with proper generic parameters (already correct in the generic impl blocks — verify struct definition)
-- Add explicit type annotation on `search()` error closure
-
-### `src/queue.rs`
-- All `Store` references in function signatures become `Store<E, X>`
-- Add explicit type annotation on `ingest_text` result
+1. **Proto** — reserve OLLAMA_READY, add EventTopic values 41/42, add MemoryService messages + service definition, regenerate both copies
+2. **Config TOML** — add `embedding_dim = 768` to `[embedder]`
+3. **config.rs** — add `embedding_dim: usize` to `EmbedderConfig`, update test TOML
+4. **engine.rs** — change `write()` return to `SenaResult<String>`, fix event topic constants, remove TODO(proto)
+5. **profile.rs** — force `degraded_extractor = true` in Phase 1, comment out capability check with `// Phase 2:` prefix
+6. **main.rs** — replace hardcoded 768 with `config.embedder.embedding_dim`, replace TCP listener with real tonic server, remove TODO comments
+7. **grpc.rs** — full rewrite implementing the proto-generated `MemoryService` trait with Write/Read/Promote RPCs
 
 ## Out of Scope
 
-- Implementing the LlamaExtractor inference loop (Phase 2 — PRD §6.5)
-- Adding MemoryService to the daemon-bus proto file (proto stabilization follow-up)
-- Adding TOPIC_MEMORY_WRITE_COMPLETED / TOPIC_MEMORY_TIER_PROMOTED to EventTopic enum (proto follow-up)
-- Changing ech0's API or adding serde derives to ech0 types
-- Modifying any subsystem other than memory-engine
+- Implementing the LlamaExtractor inference loop (Phase 2)
+- Creating a buf snapshot baseline
+- Modifying any file not listed in the 7 fixes
+- Changing ech0's API or any other crate

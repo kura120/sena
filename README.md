@@ -40,7 +40,7 @@ The architecture is modular, subsystems communicate over an internal message bus
 | Subsystem | Language | Status |
 |---|---|---|
 | daemon-bus | Rust | ✅ Scaffolded |
-| model-probe | Rust | 🔨 In progress |
+| model-probe | Rust | ✅ Scaffolded |
 | memory-engine | Rust | 🔨 In progress |
 | ech0 | Rust | 🔨 In progress |
 | CTP | Python | 📋 Planned |

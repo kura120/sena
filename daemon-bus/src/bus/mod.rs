@@ -39,6 +39,8 @@ pub fn topic_name(topic: EventTopic) -> &'static str {
         EventTopic::TopicTaskTimeout => "watchdog.task_timeout",
         EventTopic::TopicTaskTerminated => "watchdog.task_terminated",
         EventTopic::TopicMemoryUpdated => "memory.updated",
+        EventTopic::TopicMemoryWriteCompleted => "memory.write_completed",
+        EventTopic::TopicMemoryTierPromoted => "memory.tier_promoted",
         EventTopic::TopicModelProbeFailed => "model_probe.failed",
         EventTopic::TopicLoraTrainingRecommended => "lora.training_recommended",
         EventTopic::TopicUserMessageReceived => "user.message.received",

@@ -82,6 +82,7 @@ backoff_ms = 500
 [embedder]
 # Path to the GGUF model file used for embedding generation.
 model_path = "models/embedding.gguf"
+embedding_dim = 768   # must match the GGUF model's embedding output dimension
 # Number of texts to batch in a single embedding call. Higher values use
 # more VRAM. 32 is conservative for 6 GB VRAM with a 7B model.
 batch_size = 32

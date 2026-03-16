@@ -172,21 +172,28 @@ pub fn derive_config(
         + (profile.reasoning_quality * contradiction_sensitivity_range);
 
     // ── Degraded extractor ──────────────────────────────────────────────
-    // If the model cannot produce structured output at all, the extractor
-    // trait impl should return minimal/stub results rather than hallucinated
-    // garbage. This flag is checked in engine.rs when constructing the
-    // extractor — it does NOT silently degrade without logging.
-    let degraded_extractor = profile.structured_output == CapabilityLevel::None;
+    // Phase 2: When the LlamaExtractor inference loop is wired, restore
+    // the capability-based check below and remove the forced override.
+    //
+    // Phase 2: let degraded_extractor = profile.structured_output == CapabilityLevel::None;
+    //
+    // Phase 2: if degraded_extractor {
+    // Phase 2:     tracing::warn!(
+    // Phase 2:         subsystem = "memory_engine",
+    // Phase 2:         component = "profile",
+    // Phase 2:         model_id = %profile.model_id,
+    // Phase 2:         structured_output = ?profile.structured_output,
+    // Phase 2:         "extractor set to degraded stub mode — model cannot produce structured output"
+    // Phase 2:     );
+    // Phase 2: }
+    let degraded_extractor = true;
 
-    if degraded_extractor {
-        tracing::warn!(
-            subsystem = "memory_engine",
-            component = "profile",
-            model_id = %profile.model_id,
-            structured_output = ?profile.structured_output,
-            "extractor set to degraded stub mode — model cannot produce structured output"
-        );
-    }
+    tracing::info!(
+        subsystem = "memory_engine",
+        component = "profile",
+        structured_output = ?profile.structured_output,
+        "LlamaExtractor inference loop not wired in Phase 1 — forcing DegradedExtractor regardless of model capability"
+    );
 
     let derived = ProfileDerivedConfig {
         context_budget,
@@ -252,6 +259,7 @@ mod tests {
             },
             embedder: crate::config::EmbedderConfig {
                 model_path: "models/embedding.gguf".to_owned(),
+                embedding_dim: 768,
                 batch_size: 32,
                 gpu_layers: 99,
             },
@@ -293,7 +301,8 @@ mod tests {
 
         assert_eq!(derived.context_budget, 6144);
         assert!(derived.dynamic_linking_enabled);
-        assert!(!derived.degraded_extractor);
+        // Phase 1: degraded_extractor is always true regardless of model capability
+        assert!(derived.degraded_extractor);
         assert_eq!(derived.model_id, "test-model-7b");
         assert_eq!(derived.memory_injection_fidelity, 0.85);
 
@@ -337,6 +346,7 @@ mod tests {
 
         let derived = derive_config(&profile, &config).expect("should derive successfully");
 
+        // Phase 1: always true regardless of structured_output capability
         assert!(derived.degraded_extractor);
     }
 
@@ -348,7 +358,8 @@ mod tests {
 
         let derived = derive_config(&profile, &config).expect("should derive successfully");
 
-        assert!(!derived.degraded_extractor);
+        // Phase 1: degraded_extractor is forced true — LlamaExtractor inference loop not wired
+        assert!(derived.degraded_extractor);
     }
 
     #[test]
