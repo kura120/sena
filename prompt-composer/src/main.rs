@@ -1,3 +1,4 @@
+pub mod assembler;
 pub mod config;
 pub mod error;
 pub mod esu;
