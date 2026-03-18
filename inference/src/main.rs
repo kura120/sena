@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod inference_engine;
 pub mod model_loader;
 pub mod model_registry;
 pub mod request_queue;
