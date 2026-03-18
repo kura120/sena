@@ -1,0 +1,42 @@
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+memory_engine_address = "http://127.0.0.1:50052"
+connection_timeout_ms = 5000
+
+[surface_thresholds]
+user_active = 0.9
+idle_2min = 0.6
+idle_10min = 0.3
+
+[expiry_windows]
+high_relevance_secs = 300
+medium_relevance_secs = 120
+low_relevance_secs = 30
+
+[default_weights]
+urgency = 0.9
+emotional_resonance = 0.7
+novelty = 0.6
+recurrence = 0.4
+idle_curiosity = 0.3
+
+[consolidation]
+idle_threshold_secs = 600
+promotion_min_score = 0.5
+max_entries_per_cycle = 50
+
+[compaction]
+pre_rot_fraction = 0.8
+max_entries_to_summarize = 100
+
+[queue]
+max_depth = 256
+
+[activity]
+poll_interval_ms = 500
+idle_2min_threshold_secs = 120
+idle_10min_threshold_secs = 600
+
+[logging]
+level = "info"
+format = "json"

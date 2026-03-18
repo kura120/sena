@@ -1,0 +1,47 @@
+[package]
+name = "ctp"
+version = "0.1.0"
+edition = "2021"
+description = "Sena CTP subsystem — continuous proactive cognitive loop for thought generation, relevance evaluation, and memory consolidation"
+publish = false
+
+[[bin]]
+name = "ctp"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+# Streaming gRPC responses
+tokio-stream = "0.1"
+# Serialization and config
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+# Error handling
+thiserror = "2"
+# IDs
+uuid = { version = "1", features = ["v4"] }
+# Timestamps
+chrono = { version = "0.4", features = ["serde"] }
+# Float ordering for priority queue
+ordered-float = "4"
+
+# Win32 activity detection — Windows only
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
+] }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
