@@ -205,6 +205,71 @@ pub struct WatchdogStatusResponse {
     >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryWriteRequest {
+    #[prost(string, tag = "1")]
+    pub text: ::prost::alloc::string::String,
+    /// "short_term" | "long_term" | "episodic"
+    #[prost(string, tag = "2")]
+    pub target_tier: ::prost::alloc::string::String,
+    /// "reactive" | "background"
+    #[prost(string, tag = "3")]
+    pub priority: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryWriteResponse {
+    #[prost(bool, tag = "1")]
+    pub accepted: bool,
+    #[prost(string, tag = "2")]
+    pub entry_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryReadRequest {
+    #[prost(string, tag = "1")]
+    pub query: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub limit: u32,
+    #[prost(float, tag = "3")]
+    pub min_score: f32,
+    /// "reactive" | "background"
+    #[prost(string, tag = "4")]
+    pub priority: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemorySearchResult {
+    #[prost(string, tag = "1")]
+    pub node_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub summary: ::prost::alloc::string::String,
+    #[prost(float, tag = "3")]
+    pub score: f32,
+    #[prost(string, tag = "4")]
+    pub tier: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryReadResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub results: ::prost::alloc::vec::Vec<MemorySearchResult>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryPromoteRequest {
+    #[prost(string, tag = "1")]
+    pub entry_id: ::prost::alloc::string::String,
+    /// "reactive" | "background"
+    #[prost(string, tag = "2")]
+    pub priority: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct MemoryPromoteResponse {
+    #[prost(bool, tag = "1")]
+    pub promoted: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SenaErrorProto {
     /// Machine-readable error code.
     #[prost(string, tag = "1")]
@@ -212,6 +277,98 @@ pub struct SenaErrorProto {
     /// Human-readable message. Never contains prompt content, SoulBox values, or user data.
     #[prost(string, tag = "2")]
     pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CompleteRequest {
+    /// Fully assembled TOON-encoded prompt from prompt-composer.
+    #[prost(string, tag = "1")]
+    pub prompt: ::prost::alloc::string::String,
+    /// Target model ID from the registry. Empty string means the active model.
+    #[prost(string, tag = "2")]
+    pub model_id: ::prost::alloc::string::String,
+    /// Maximum number of tokens to generate.
+    #[prost(uint32, tag = "3")]
+    pub max_tokens: u32,
+    /// Sampling temperature. 0.0 for deterministic probes; SoulBox-defined for normal inference.
+    #[prost(float, tag = "4")]
+    pub temperature: f32,
+    /// Priority tier mapped to the global PriorityTier enum values.
+    #[prost(int32, tag = "5")]
+    pub priority: i32,
+    /// Unique per-call trace ID for correlation across subsystems.
+    #[prost(string, tag = "6")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CompleteResponse {
+    /// The generated completion text.
+    #[prost(string, tag = "1")]
+    pub text: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub tokens_generated: u32,
+    #[prost(uint32, tag = "3")]
+    pub tokens_prompt: u32,
+    /// Which model actually served the request (may differ from request.model_id if fallback occurred).
+    #[prost(string, tag = "4")]
+    pub model_id: ::prost::alloc::string::String,
+    /// Echoed from CompleteRequest for correlation.
+    #[prost(string, tag = "5")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StreamCompleteChunk {
+    /// One token of the streamed response.
+    #[prost(string, tag = "1")]
+    pub token: ::prost::alloc::string::String,
+    /// True on the final chunk; subsequent chunks must not be expected.
+    #[prost(bool, tag = "2")]
+    pub finished: bool,
+    /// Echoed from CompleteRequest for correlation.
+    #[prost(string, tag = "3")]
+    pub request_id: ::prost::alloc::string::String,
+}
+/// Phase 2 stub — message defined now; implementation deferred.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActivationRequest {
+    /// Which transformer layer to read activations from.
+    #[prost(uint32, tag = "1")]
+    pub layer: u32,
+    #[prost(string, tag = "2")]
+    pub request_id: ::prost::alloc::string::String,
+}
+/// Phase 2 stub — message defined now; implementation deferred.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActivationResponse {
+    #[prost(uint32, tag = "1")]
+    pub layer: u32,
+    /// Activation vector at the requested layer.
+    #[prost(float, repeated, tag = "2")]
+    pub values: ::prost::alloc::vec::Vec<f32>,
+    #[prost(string, tag = "3")]
+    pub request_id: ::prost::alloc::string::String,
+}
+/// Phase 3 stub — message defined now; implementation deferred.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SteeringRequest {
+    /// Which transformer layer to apply the steering vector at.
+    #[prost(uint32, tag = "1")]
+    pub layer: u32,
+    /// The steering direction vector.
+    #[prost(float, repeated, tag = "2")]
+    pub direction: ::prost::alloc::vec::Vec<f32>,
+    /// How strongly to apply the direction.
+    #[prost(float, tag = "3")]
+    pub magnitude: f32,
+    #[prost(string, tag = "4")]
+    pub request_id: ::prost::alloc::string::String,
+}
+/// Phase 3 stub — message defined now; implementation deferred.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SteeringAck {
+    #[prost(bool, tag = "1")]
+    pub applied: bool,
+    #[prost(string, tag = "2")]
+    pub request_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -221,13 +378,24 @@ pub enum BootSignal {
     MemoryEngineReady = 2,
     PlatformReady = 3,
     AgentsReady = 4,
-    OllamaReady = 5,
     ModelProfileReady = 6,
     LoraReady = 7,
     LoraSkipped = 8,
     CtpReady = 9,
     UiReady = 10,
     SenaReady = 11,
+    /// Inference subsystem lifecycle signals.
+    ///
+    /// Model is loaded and ready to serve completions.
+    InferenceReady = 12,
+    /// Model switching in progress or unrecoverable error.
+    InferenceUnavailable = 13,
+    /// OOM or partial failure; partial recovery in progress.
+    InferenceDegraded = 14,
+    /// SoulBox signals.
+    ///
+    /// Schema loaded and encryption verified.
+    SoulboxReady = 15,
 }
 impl BootSignal {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -241,13 +409,16 @@ impl BootSignal {
             Self::MemoryEngineReady => "MEMORY_ENGINE_READY",
             Self::PlatformReady => "PLATFORM_READY",
             Self::AgentsReady => "AGENTS_READY",
-            Self::OllamaReady => "OLLAMA_READY",
             Self::ModelProfileReady => "MODEL_PROFILE_READY",
             Self::LoraReady => "LORA_READY",
             Self::LoraSkipped => "LORA_SKIPPED",
             Self::CtpReady => "CTP_READY",
             Self::UiReady => "UI_READY",
             Self::SenaReady => "SENA_READY",
+            Self::InferenceReady => "INFERENCE_READY",
+            Self::InferenceUnavailable => "INFERENCE_UNAVAILABLE",
+            Self::InferenceDegraded => "INFERENCE_DEGRADED",
+            Self::SoulboxReady => "SOULBOX_READY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -258,13 +429,16 @@ impl BootSignal {
             "MEMORY_ENGINE_READY" => Some(Self::MemoryEngineReady),
             "PLATFORM_READY" => Some(Self::PlatformReady),
             "AGENTS_READY" => Some(Self::AgentsReady),
-            "OLLAMA_READY" => Some(Self::OllamaReady),
             "MODEL_PROFILE_READY" => Some(Self::ModelProfileReady),
             "LORA_READY" => Some(Self::LoraReady),
             "LORA_SKIPPED" => Some(Self::LoraSkipped),
             "CTP_READY" => Some(Self::CtpReady),
             "UI_READY" => Some(Self::UiReady),
             "SENA_READY" => Some(Self::SenaReady),
+            "INFERENCE_READY" => Some(Self::InferenceReady),
+            "INFERENCE_UNAVAILABLE" => Some(Self::InferenceUnavailable),
+            "INFERENCE_DEGRADED" => Some(Self::InferenceDegraded),
+            "SOULBOX_READY" => Some(Self::SoulboxReady),
             _ => None,
         }
     }
@@ -291,12 +465,32 @@ pub enum EventTopic {
     TopicTaskTerminated = 31,
     /// Memory engine events (published by memory-engine, consumed by others)
     TopicMemoryUpdated = 40,
+    TopicMemoryWriteCompleted = 41,
+    TopicMemoryTierPromoted = 42,
     /// Model probe
     TopicModelProbeFailed = 50,
     TopicLoraTrainingRecommended = 51,
     /// User-facing reactive loop
     TopicUserMessageReceived = 60,
     TopicUserMessageResponse = 61,
+    /// CTP events
+    ///
+    /// A thought passed threshold and is ready to surface.
+    TopicThoughtSurfaced = 62,
+    /// Session context has been compacted.
+    TopicSessionCompactionTriggered = 63,
+    /// CTP requesting memory-engine to run consolidation.
+    TopicMemoryConsolidationRequested = 64,
+    /// Inference events
+    ///
+    /// Model unload started; callers should expect UNAVAILABLE.
+    TopicInferenceModelSwitching = 65,
+    /// Agent registry events
+    ///
+    /// A community agent passed review and was added to the registry.
+    TopicAgentRegistered = 66,
+    /// A community agent failed review and was moved to quarantine.
+    TopicAgentQuarantined = 67,
 }
 impl EventTopic {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -319,10 +513,20 @@ impl EventTopic {
             Self::TopicTaskTimeout => "TOPIC_TASK_TIMEOUT",
             Self::TopicTaskTerminated => "TOPIC_TASK_TERMINATED",
             Self::TopicMemoryUpdated => "TOPIC_MEMORY_UPDATED",
+            Self::TopicMemoryWriteCompleted => "TOPIC_MEMORY_WRITE_COMPLETED",
+            Self::TopicMemoryTierPromoted => "TOPIC_MEMORY_TIER_PROMOTED",
             Self::TopicModelProbeFailed => "TOPIC_MODEL_PROBE_FAILED",
             Self::TopicLoraTrainingRecommended => "TOPIC_LORA_TRAINING_RECOMMENDED",
             Self::TopicUserMessageReceived => "TOPIC_USER_MESSAGE_RECEIVED",
             Self::TopicUserMessageResponse => "TOPIC_USER_MESSAGE_RESPONSE",
+            Self::TopicThoughtSurfaced => "TOPIC_THOUGHT_SURFACED",
+            Self::TopicSessionCompactionTriggered => "TOPIC_SESSION_COMPACTION_TRIGGERED",
+            Self::TopicMemoryConsolidationRequested => {
+                "TOPIC_MEMORY_CONSOLIDATION_REQUESTED"
+            }
+            Self::TopicInferenceModelSwitching => "TOPIC_INFERENCE_MODEL_SWITCHING",
+            Self::TopicAgentRegistered => "TOPIC_AGENT_REGISTERED",
+            Self::TopicAgentQuarantined => "TOPIC_AGENT_QUARANTINED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -342,10 +546,22 @@ impl EventTopic {
             "TOPIC_TASK_TIMEOUT" => Some(Self::TopicTaskTimeout),
             "TOPIC_TASK_TERMINATED" => Some(Self::TopicTaskTerminated),
             "TOPIC_MEMORY_UPDATED" => Some(Self::TopicMemoryUpdated),
+            "TOPIC_MEMORY_WRITE_COMPLETED" => Some(Self::TopicMemoryWriteCompleted),
+            "TOPIC_MEMORY_TIER_PROMOTED" => Some(Self::TopicMemoryTierPromoted),
             "TOPIC_MODEL_PROBE_FAILED" => Some(Self::TopicModelProbeFailed),
             "TOPIC_LORA_TRAINING_RECOMMENDED" => Some(Self::TopicLoraTrainingRecommended),
             "TOPIC_USER_MESSAGE_RECEIVED" => Some(Self::TopicUserMessageReceived),
             "TOPIC_USER_MESSAGE_RESPONSE" => Some(Self::TopicUserMessageResponse),
+            "TOPIC_THOUGHT_SURFACED" => Some(Self::TopicThoughtSurfaced),
+            "TOPIC_SESSION_COMPACTION_TRIGGERED" => {
+                Some(Self::TopicSessionCompactionTriggered)
+            }
+            "TOPIC_MEMORY_CONSOLIDATION_REQUESTED" => {
+                Some(Self::TopicMemoryConsolidationRequested)
+            }
+            "TOPIC_INFERENCE_MODEL_SWITCHING" => Some(Self::TopicInferenceModelSwitching),
+            "TOPIC_AGENT_REGISTERED" => Some(Self::TopicAgentRegistered),
+            "TOPIC_AGENT_QUARANTINED" => Some(Self::TopicAgentQuarantined),
             _ => None,
         }
     }
@@ -1265,6 +1481,373 @@ pub mod watchdog_service_client {
                         "GetWatchdogStatus",
                     ),
                 );
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated client implementations.
+pub mod memory_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct MemoryServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl MemoryServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> MemoryServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> MemoryServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            MemoryServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        pub async fn write(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MemoryWriteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MemoryWriteResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.MemoryService/Write",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("sena.daemonbus.v1.MemoryService", "Write"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn read(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MemoryReadRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MemoryReadResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.MemoryService/Read",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("sena.daemonbus.v1.MemoryService", "Read"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn promote(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MemoryPromoteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MemoryPromoteResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.MemoryService/Promote",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("sena.daemonbus.v1.MemoryService", "Promote"));
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated client implementations.
+pub mod inference_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct InferenceServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl InferenceServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> InferenceServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InferenceServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            InferenceServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /// Run a full completion. Blocks until generation is complete.
+        pub async fn complete(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CompleteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CompleteResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/Complete",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("sena.daemonbus.v1.InferenceService", "Complete"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Run a streamed completion. Server pushes one chunk per token.
+        pub async fn stream_complete(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CompleteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::StreamCompleteChunk>>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/StreamComplete",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "sena.daemonbus.v1.InferenceService",
+                        "StreamComplete",
+                    ),
+                );
+            self.inner.server_streaming(req, path, codec).await
+        }
+        /// Read transformer layer activations. Phase 2 — stub only; not yet implemented.
+        pub async fn read_activations(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ActivationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ActivationResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/ReadActivations",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "sena.daemonbus.v1.InferenceService",
+                        "ReadActivations",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
+        pub async fn steer(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SteeringRequest>,
+        ) -> std::result::Result<tonic::Response<super::SteeringAck>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/Steer",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("sena.daemonbus.v1.InferenceService", "Steer"));
             self.inner.unary(req, path, codec).await
         }
     }
