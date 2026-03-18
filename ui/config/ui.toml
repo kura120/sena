@@ -1,0 +1,24 @@
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+connection_timeout_ms = 5000
+
+[window]
+title = "Sena"
+width = 1200.0
+height = 800.0
+
+[debug_panel]
+width = 420.0
+animation_duration_ms = 250
+thought_feed_max = 100
+event_feed_max = 200
+
+[reconnect]
+initial_delay_ms = 0
+second_delay_ms = 2000
+third_delay_ms = 10000
+steady_state_delay_ms = 30000
+
+[logging]
+level = "info"
+format = "json"

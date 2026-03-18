@@ -1,0 +1,39 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition = "2021"
+description = "Sena UI subsystem — Freya-based debug panel and future chat interface"
+publish = false
+
+[[bin]]
+name = "ui"
+path = "src/main.rs"
+
+[dependencies]
+# GUI framework
+freya = "0.4.0-rc.14"
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+# Streaming gRPC responses
+tokio-stream = "0.1"
+# Serialization and config
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+serde_json = "1"
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+# Timestamps
+chrono = { version = "0.4", features = ["serde"] }
+# Animation
+freya-animation = "0.4.0-rc.14"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+freya-testing = "0.4.0-rc.14"
