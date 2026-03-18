@@ -13,6 +13,7 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize)]
 pub struct GrpcConfig {
     pub daemon_bus_address: String,
+    pub listen_address: String,
     pub listen_port: u16,
     pub connection_timeout_ms: u64,
 }
@@ -96,6 +97,7 @@ mod tests {
     const VALID_CONFIG: &str = r#"
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
+listen_address = "0.0.0.0"
 listen_port = 50055
 connection_timeout_ms = 5000
 
@@ -134,6 +136,7 @@ format = "json"
         let invalid_config = r#"
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
+listen_address = "0.0.0.0"
 listen_port = 50055
 connection_timeout_ms = 5000
 
@@ -172,6 +175,7 @@ format = "json"
         let invalid_config = r#"
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
+listen_address = "0.0.0.0"
 listen_port = 50055
 connection_timeout_ms = 5000
 

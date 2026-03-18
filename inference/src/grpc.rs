@@ -172,6 +172,7 @@ mod tests {
         let content = r#"
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
+listen_address = "0.0.0.0"
 listen_port = 50055
 connection_timeout_ms = 5000
 
@@ -277,6 +278,7 @@ format = "json"
         let content = r#"
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
+listen_address = "0.0.0.0"
 listen_port = 50055
 connection_timeout_ms = 5000
 
