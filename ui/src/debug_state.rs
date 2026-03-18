@@ -206,7 +206,7 @@ pub fn format_topic_name(topic_value: i32) -> &'static str {
 
 /// Truncate a string to the given max length, appending an ellipsis if truncated.
 pub fn truncate_with_ellipsis(text: &str, max_len: usize) -> String {
-    if text.len() <= max_len {
+    if text.chars().count() <= max_len {
         text.to_string()
     } else {
         let truncated: String = text.chars().take(max_len.saturating_sub(1)).collect();

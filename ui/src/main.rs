@@ -76,6 +76,7 @@ fn main() {
 
     // Capture config values for the closure.
     let panel_width = config.debug_panel.width;
+    // Intentional leak — title must be 'static for Freya's WindowConfig closure bound.
     let window_title: &'static str = Box::leak(config.window.title.clone().into_boxed_str());
 
     let debug_state_for_app = Arc::clone(&debug_state);
