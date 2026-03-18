@@ -1,0 +1,23 @@
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+listen_port = 50054
+connection_timeout_ms = 5000
+
+[esu]
+save_threshold = 0.15
+latency_threshold_ms = 10
+sacred_always_json = true
+
+[budget]
+output_reserve_tokens = 512
+min_sacred_headroom_pct = 0.1
+
+[drop_order]
+tiers = ["telemetry", "os_context", "short_term", "long_term", "episodic"]
+
+[telemetry]
+emit_encoding_choices = true
+
+[logging]
+level = "info"
+format = "json"
