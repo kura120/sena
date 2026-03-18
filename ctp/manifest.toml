@@ -1,0 +1,4 @@
+name = "ctp"
+language = "rust"
+responsibility = "Continuous proactive cognitive loop — thought generation, relevance evaluation, memory consolidation"
+capability_flags = ["CTP_READY"]
