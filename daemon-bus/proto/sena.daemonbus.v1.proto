@@ -24,12 +24,6 @@ enum BootSignal {
   CTP_READY = 9;
   UI_READY = 10;
   SENA_READY = 11;
-  // Inference subsystem lifecycle signals.
-  INFERENCE_READY = 12;        // Model is loaded and ready to serve completions.
-  INFERENCE_UNAVAILABLE = 13;  // Model switching in progress or unrecoverable error.
-  INFERENCE_DEGRADED = 14;     // OOM or partial failure; partial recovery in progress.
-  // SoulBox signals.
-  SOULBOX_READY = 15;          // Schema loaded and encryption verified.
 }
 
 message BootSignalRequest {
@@ -101,18 +95,6 @@ enum EventTopic {
   // User-facing reactive loop
   TOPIC_USER_MESSAGE_RECEIVED = 60;
   TOPIC_USER_MESSAGE_RESPONSE = 61;
-
-  // CTP events
-  TOPIC_THOUGHT_SURFACED = 62;               // A thought passed threshold and is ready to surface.
-  TOPIC_SESSION_COMPACTION_TRIGGERED = 63;   // Session context has been compacted.
-  TOPIC_MEMORY_CONSOLIDATION_REQUESTED = 64; // CTP requesting memory-engine to run consolidation.
-
-  // Inference events
-  TOPIC_INFERENCE_MODEL_SWITCHING = 65; // Model unload started; callers should expect UNAVAILABLE.
-
-  // Agent registry events
-  TOPIC_AGENT_REGISTERED = 66;  // A community agent passed review and was added to the registry.
-  TOPIC_AGENT_QUARANTINED = 67; // A community agent failed review and was moved to quarantine.
 }
 
 message BusEvent {
@@ -383,92 +365,4 @@ message SenaErrorProto {
   string code = 1;
   // Human-readable message. Never contains prompt content, SoulBox values, or user data.
   string message = 2;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// InferenceService
-// ─────────────────────────────────────────────────────────────────────────────
-
-// InferenceService is the single owner of llama-cpp-rs. Every subsystem that
-// needs completions is a gRPC client to this service — never direct library
-// calls. model-probe, CTP, and the reactive loop all route through here.
-
-// ── InferenceService messages ─────────────────────────────────────────────
-
-message CompleteRequest {
-  // Fully assembled TOON-encoded prompt from prompt-composer.
-  string prompt = 1;
-  // Target model ID from the registry. Empty string means the active model.
-  string model_id = 2;
-  // Maximum number of tokens to generate.
-  uint32 max_tokens = 3;
-  // Sampling temperature. 0.0 for deterministic probes; SoulBox-defined for normal inference.
-  float temperature = 4;
-  // Priority tier mapped to the global PriorityTier enum values.
-  int32 priority = 5;
-  // Unique per-call trace ID for correlation across subsystems.
-  string request_id = 6;
-}
-
-message CompleteResponse {
-  // The generated completion text.
-  string text = 1;
-  uint32 tokens_generated = 2;
-  uint32 tokens_prompt = 3;
-  // Which model actually served the request (may differ from request.model_id if fallback occurred).
-  string model_id = 4;
-  // Echoed from CompleteRequest for correlation.
-  string request_id = 5;
-}
-
-message StreamCompleteChunk {
-  // One token of the streamed response.
-  string token = 1;
-  // True on the final chunk; subsequent chunks must not be expected.
-  bool finished = 2;
-  // Echoed from CompleteRequest for correlation.
-  string request_id = 3;
-}
-
-// Phase 2 stub — message defined now; implementation deferred.
-message ActivationRequest {
-  // Which transformer layer to read activations from.
-  uint32 layer = 1;
-  string request_id = 2;
-}
-
-// Phase 2 stub — message defined now; implementation deferred.
-message ActivationResponse {
-  uint32 layer = 1;
-  // Activation vector at the requested layer.
-  repeated float values = 2;
-  string request_id = 3;
-}
-
-// Phase 3 stub — message defined now; implementation deferred.
-message SteeringRequest {
-  // Which transformer layer to apply the steering vector at.
-  uint32 layer = 1;
-  // The steering direction vector.
-  repeated float direction = 2;
-  // How strongly to apply the direction.
-  float magnitude = 3;
-  string request_id = 4;
-}
-
-// Phase 3 stub — message defined now; implementation deferred.
-message SteeringAck {
-  bool applied = 1;
-  string request_id = 2;
-}
-
-service InferenceService {
-  // Run a full completion. Blocks until generation is complete.
-  rpc Complete(CompleteRequest) returns (CompleteResponse);
-  // Run a streamed completion. Server pushes one chunk per token.
-  rpc StreamComplete(CompleteRequest) returns (stream StreamCompleteChunk);
-  // Read transformer layer activations. Phase 2 — stub only; not yet implemented.
-  rpc ReadActivations(ActivationRequest) returns (ActivationResponse);
-  // Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
-  rpc Steer(SteeringRequest) returns (SteeringAck);
 }

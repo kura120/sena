@@ -1,5 +1,5 @@
 # Sena — Product Requirements Document
-**Version:** 0.7.1
+**Version:** 0.6.2
 **Status:** Pre-Development / Ideation --> In-Development
 **Platform:** Windows 11 (primary) → macOS, Linux (future)
 **Distribution:** Free & Open Source
@@ -98,35 +98,26 @@ This is philosophically consistent with the emergent identity model.
 Every subsystem signals daemon-bus when it is truly ready — not just started. No subsystem proceeds until its dependencies signal ready. Target: < 5 seconds total to Sena-ready state (excluding model load).
 
 ```
-1.  daemon-bus starts                     → DAEMON_BUS_READY
-2.  memory-engine starts                  → waits: DAEMON_BUS_READY
-            → loads nomic-embed in-process
-            → MEMORY_ENGINE_READY
-3.  inference starts                      → waits: DAEMON_BUS_READY
-            → loads completion model via llama-cpp-rs
-            → INFERENCE_READY
-4.  model-probe runs                      → waits: INFERENCE_READY
-            → runs probe battery via InferenceService gRPC
-            → MODEL_PROFILE_READY → exits
-5.  lora-manager starts                   → waits: MODEL_PROFILE_READY
-            → LORA_READY | LORA_SKIPPED
-6.  prompt-composer starts                → waits: MEMORY_ENGINE_READY
-            → PROMPT_COMPOSER_READY
-7.  soulbox starts                        → waits: DAEMON_BUS_READY
-            → SOULBOX_READY
-8.  ctp starts                            → waits: MEMORY_ENGINE_READY
-              + MODEL_PROFILE_READY
-              + LORA_READY | LORA_SKIPPED
-            → CTP_READY
-9.  agents starts                         → waits: INFERENCE_READY
-              + MEMORY_ENGINE_READY
-              + CTP_READY
-              + SOULBOX_READY
-            → AGENTS_READY
-10. platform starts                       → waits: DAEMON_BUS_READY
-            → PLATFORM_READY
-11. [ SENA_READY ] ← emitted by daemon-bus when all required signals received
-12. sena-ui spawns (on user activation)   → waits: SENA_READY → UI_READY
+1. daemon-bus starts                    → signals: DAEMON_BUS_READY
+2. memory-engine initializes            → waits: DAEMON_BUS_READY
+                                        → signals: MEMORY_ENGINE_READY
+3. platform layer starts                → waits: DAEMON_BUS_READY
+                                        → signals: PLATFORM_READY
+4. sena-agents starts                   → waits: MEMORY_ENGINE_READY
+                                        → signals: AGENTS_READY
+5. llama-cpp-rs loads model, health     → waits: AGENTS_READY check passes                        
+                                        → signals: MODEL_READY
+5.5. ModelProbe runs capability battery → waits: MODEL_READY
+                                        → signals: MODEL_PROFILE_READY
+5.6. LoRA Manager loads active adapter  → waits: MODEL_PROFILE_READY
+     (if available for current model)   → signals: LORA_READY (or LORA_SKIPPED if incompatible)
+6. CTP starts                           → waits: MEMORY_ENGINE_READY
+                                              + MODEL_PROFILE_READY
+                                              + LORA_READY | LORA_SKIPPED
+                                        → signals: CTP_READY
+7. sena-ui spawns (on user activation)  → waits: CTP_READY
+                                        → signals: UI_READY
+8. [ SENA_READY ]
 ```
 
 ### 3.3 Multi-Agent System (MAS)
@@ -220,94 +211,22 @@ Sena has no fixed demographic. The platform is designed to be universally adopta
 
 ### 6.1 Model Provider
 User-defined. Sena supports:
-- Local / open-source models (LLaMA, Mistral, DeepSeek, Gemma, Qwen, etc.) — primary focus
+- Local / open-source models (Ollama, LLaMA, Mistral, DeepSeek, Gemma, etc.) — primary focus
 - Cloud API providers (OpenAI, Anthropic, Google) — optional, user opt-in
-- Mixed configurations — different models assigned to different agents per manifest
+- Mixed configurations — different models assigned to different agents
 
-**Primary inference backend:** llama-cpp-rs — owned exclusively by the `inference` subsystem.
-The `inference` process is the single owner of all GGUF model loading, KV cache management,
-LoRA hot-swap, and completion/streaming generation. No other subsystem loads a completion
-model directly. All subsystems that need completions are gRPC clients to `InferenceService`.
+**Primary inference backend:** llama-cpp-rs — direct GGUF model loading, KV cache 
+manipulation, activation hooks for ModelProbe, LoRA hot-swap without full model reload. 
+Ollama may be used by users as a model download manager — Sena does not use Ollama's 
+runtime API. GGUF files pulled via Ollama are loaded directly by llama-cpp-rs.
 
-**Embedding model:** memory-engine loads a dedicated small embedding GGUF in-process via
-llama-cpp-rs (e.g. nomic-embed-text-v1.5 Q4, ~300MB VRAM). This is separate from the
-completion model and never shared with other subsystems. The split allows zero-latency
-in-process embeddings while keeping the completion model under unified ownership.
-
-**VRAM budget (Low tier — GTX 1660 Ti / 6GB):**
-- Completion model (7B Q4):     ~4.3GB
-- Embedding model (nomic Q4):   ~0.3GB
-- System overhead:              ~0.2GB
-- Headroom:                     ~1.2GB
-
-**Model switching at runtime:** when the user changes the configured model, daemon-bus signals
-`INFERENCE_RELOAD` to the inference process. inference unloads the current model, loads the
-new GGUF, and re-signals `INFERENCE_READY`. model-probe re-runs its full probe battery.
-All subsystems awaiting `MODEL_PROFILE_READY` resume from the new profile. Active inference
-calls in flight receive `UNAVAILABLE` and are retried after `INFERENCE_READY` fires.
-
-**Multi-model support:** the inference process maintains a model registry. Each agent manifest
-declares a `model_id`. inference loads models on demand subject to VRAM budget enforced by
-`HardwareProfile.tier`. On Low tier: one completion model maximum, all agents share it.
-On Mid and High tiers: multiple models loaded simultaneously, LRU eviction when VRAM budget
-is exceeded. Eviction is logged and visible in the debug UI.
-
-**Ollama:** may be used as a GGUF download manager only. Sena never calls Ollama's runtime
-API. GGUF files downloaded via Ollama are passed to inference by file path.
-
-### 6.2 Inference — Model Ownership and Serving
-
-`inference` is a Rust subsystem that owns llama-cpp-rs and serves completions to all
-subsystems via gRPC. It is a required subsystem — if it fails, daemon-bus halts the boot
-sequence and notifies the user.
-
-**Responsibilities:**
-- Load and manage GGUF models via llama-cpp-rs
-- Serve `InferenceService` gRPC: `Complete`, `StreamComplete`
-- Manage VRAM budget — enforce model registry limits per `HardwareProfile.tier`
-- Handle model reload on user model-switch events
-- Detect and surface OOM errors with actionable user messaging
-- Apply loaded LoRA adapters to inference calls when lora-manager signals `LORA_READY`
-
-**InferenceService gRPC contract:**
-
-```protobuf
-service InferenceService {
-  rpc Complete(CompletionRequest) returns (CompletionResponse);
-  rpc StreamComplete(CompletionRequest) returns (stream CompletionToken);
-}
-
-message CompletionRequest {
-  string model_id      = 1;  // empty = use primary configured model
-  repeated Message messages = 2;
-  uint32 max_tokens    = 3;
-  float  temperature   = 4;
-  string trace_context = 5;
-}
-```
-
-**OOM handling:** if a model cannot fit in VRAM, inference first retries with reduced
-`n_gpu_layers` (partial CPU offload). If that also fails, inference signals
-`INFERENCE_DEGRADED` to daemon-bus with `required_vram` and `available_vram` fields.
-Sena surfaces this to the user with the exact numbers and a model size recommendation.
-Sena never silently runs a partially-loaded model.
-
-**Boot signal:** `INFERENCE_READY` — required. Blocks model-probe, CTP, and agents.
-
-inference is a named extractable subsystem. It lives at `inference/` in the project root.
-
-### 6.3 ModelProbe — Runtime Capability Detection
-
-Sena never assumes what a model can do. After `inference` signals `INFERENCE_READY`,
-ModelProbe runs a battery of lightweight test prompts via `InferenceService` gRPC and
-builds a `ModelCapabilityProfile` that gates which agents and behaviors are active.
-Capabilities are discovered, not configured. ModelProbe is a gRPC client to inference —
-it never loads a model directly.
+### 6.2 ModelProbe — Runtime Capability Detection
+Sena never assumes what a model can do. After llama.cpp loads at boot, ModelProbe runs a battery of lightweight test prompts against the configured model and builds a `ModelCapabilityProfile` that gates which agents and behaviors are active. Capabilities are discovered, not configured.
 
 ```rust
 pub struct ModelCapabilityProfile {
-  pub pre_rot_threshold: u32,         // practical token budget before performance cliff
-  pub graph_extraction: CapabilityLevel,  // gates ech0 graph extraction
+    pub pre_rot_threshold: u32,         // practical token budget before performance cliff
+    pub graph_extraction: CapabilityLevel,  // gates ech0 graph extraction
 }
 ```
 **Context rot note:** Performance does not degrade linearly as context fills. Models exhibit sharp, unpredictable drops at different token counts regardless of their advertised limit. `pre_rot_threshold` is always set conservatively — PC never uses the advertised context window as its budget ceiling.
@@ -316,27 +235,26 @@ ModelProbe also detects hardware capabilities and publishes a `HardwareProfile` 
 
 ```rust
 pub struct HardwareProfile {
-  pub vram_total: u64,        // MB
-  pub vram_available: u64,    // MB
-  pub ram_total: u64,         // MB
-  pub cuda_compute: String,   // e.g. "8.6" for Ampere
-  pub tier: HardwareTier,     // Low | Mid | High
+    pub vram_total: u64,        // MB
+    pub vram_available: u64,    // MB
+    pub ram_total: u64,         // MB
+    pub cuda_compute: String,   // e.g. "8.6" for Ampere
+    pub tier: HardwareTier,     // Low | Mid | High
 }
 
 pub enum HardwareTier {
-  Low,   // VRAM < 8GB
-  Mid,   // VRAM 8-15GB
-  High,  // VRAM >= 16GB
+    Low,   // VRAM < 8GB
+    Mid,   // VRAM 8-15GB
+    High,  // VRAM >= 16GB
 }
 ```
 
 `HardwareProfile` is published to daemon-bus alongside `MODEL_PROFILE_READY`. All downstream subsystems read it at boot to select their degradation level.
 
 ModelProbe reruns automatically when:
-- inference signals `INFERENCE_READY` after a model reload
-- The user changes model parameters (temperature, context length) via the UI
-- lora-manager deploys a new adapter (reasoning gap re-evaluated)
-
+- The user changes the configured model
+- The user changes model parameters (temperature, context length)
+- A new model version is pulled
 ---
 
 **Probe Battery:**
@@ -353,8 +271,8 @@ ModelProbe reruns automatically when:
 | LoRA compatibility | Checks model architecture against known LoRA-compatible families (LLaMA, Mistral, Qwen, Gemma) | Gates LoRA Manager — incompatible architectures skip adapter training entirely |
 | Memory injection fidelity | Injects a known memory context and tests whether the model reasons from it correctly | Sets memory injection depth — shallow models receive simplified context; deep models receive full tiered context |
 | Reasoning gap detection | Compares current reasoning quality score against the score recorded at last LoRA training run | Flags whether a new LoRA training cycle is warranted |
-| Context rot threshold | Measures the practical token count at which model performance degrades sharply, independent of advertised context window | Sets `pre_rot_threshold` in ModelCapabilityProfile — PC uses this as the real budget ceiling, not the advertised window |
-| Graph extraction capability | Fires a minimal `KnowledgeGraph` structured output request and validates the response structure | Gates ech0 graph extraction — if the model cannot produce valid graph output, ech0 runs in vector-only mode and the user is notified |
+Context rot threshold | Measures the practical token count at which model performance degrades sharply, independent of advertised context window | Sets `pre_rot_threshold` in ModelCapabilityProfile — PC uses this as the real budget ceiling, not the advertised window |
+| Graph extraction capability | Fires a minimal `KnowledgeGraph` structured output request and checks whether the response passes Pydantic validation | Gates ech0 graph extraction — if the model cannot produce valid graph output, ech0 runs in vector-only mode and the user is notified |
 
 **Capability gating:**
 If the model fails the reasoning probe below threshold, the Reasoning agent is disabled and Sena communicates this to the user honestly. If the model fails the structured output probe, PC falls back to JSON encoding for that model. Sena never silently degrades — every capability limitation is surfaced.
@@ -366,7 +284,7 @@ ModelProbe records a `reasoning_quality_score` in the ModelCapabilityProfile on 
 
 ModelProbe never trains adapters — it only detects gaps and signals. LoRA Manager owns all training lifecycle decisions.\
 
-### 6.4 LoRA Manager — Idle-Time Reasoning Adaptation
+### 6.3 LoRA Manager — Idle-Time Reasoning Adaptation
 
 Sena's memory system handles dynamic knowledge — what Sena knows about the user. LoRA Manager handles dynamic reasoning — how Sena thinks about the user. These operate at different timescales and serve different purposes.
 
@@ -443,7 +361,7 @@ Doc-to-LoRA stacking → Doc-to-LoRA single adapter → traditional LoRA → con
 
 ---
 
-### 6.5 CodebaseContext — Architectural Self-Awareness Layer
+### 6.4 CodebaseContext — Architectural Self-Awareness Layer
 
 Sena cannot reason about its own capabilities if it cannot see its own structure. CodebaseContext is a lightweight read-only context layer that provides subsystems with a structured, queryable representation of Sena's own architecture at runtime.
 
@@ -487,7 +405,7 @@ CodebaseContext is generated at build time from the project's `.proto` files, su
 
 CodebaseContext is a named extractable subsystem. It lives at `codebase-context/` in the project root. Language: Python (index generation) + Rust (runtime status updates via daemon-bus).
 
-### 6.6 ech0 — Memory Architecture
+### 6.5 ech0 — Memory Architecture
 
 Sena's memory layer is built on ech0, a standalone Rust crate with no Sena-specific knowledge. memory-engine is the Sena-specific integration layer that configures and consumes ech0. ech0 is a separate OSS project — any Rust application can use it independently of Sena.
 
@@ -511,14 +429,14 @@ Sena's memory layer is built on ech0, a standalone Rust crate with no Sena-speci
 | V2 | V2 | Procedural memory (workflow patterns), resource memory (file references) |
 | V3 | V3 | Full MIRIX six-component architecture, Knowledge Vault (maps to SoulBox long-term facts) |
 
-### 6.7 Performance Constraints
+### 6.6 Performance Constraints
 - Idle RAM: < 200MB (framework only, excluding model)
 - Background CPU: < 2% on modern hardware
 - Cold start: < 5 seconds to Sena-ready state (excludes model load — llama.cpp pre-loads independently)
 - Model execution is isolated and never blocks the UI thread
 - llama.cpp is pre-loaded on boot — model inference is never cold-started on first request
 
-### 6.8 Platform Requirement
+### 6.7 Platform Requirement
 **Windows 11 minimum.** Windows 10 is not supported. Windows 11-first WinRT APIs are used throughout the platform layer. No version compatibility shims.
 
 ---
@@ -601,18 +519,14 @@ All proactive outputs pass through the thought queue before surfacing. The thoug
 The Prompt Composer is a first-class extractable subsystem that sits between CTP and the model. Every model call is preceded by PC assembling a fully dynamic, fully reasoned prompt. No prompts are hardcoded or pre-made.
 
 #### Serialization — TOON
-All structured data fed into PC is encoded using TOON (Token-Oriented Object Notation)
-before injection into the model. TOON is an external open-source standard by the
-toon-format organization (22k stars). Sena uses the official `toon-format` Rust crate
-directly — it is a `cargo add`, not a custom implementation.
+All structured data fed into PC is encoded as TOON (Token-Oriented Object Notation) before injection into the model. TOON is a compact, human-readable encoding of the JSON data model designed specifically for LLM input.
 
 TOON benchmarks vs JSON:
 - Token reduction: 30-60%
 - Retrieval accuracy: 73.9% (TOON) vs 69.7% (JSON)
 - Best for: uniform arrays, repeated structures, tables, varying fields, deep trees
 
-TOON's sweet spot maps directly to Sena's prompt data shape — memory retrievals, agent
-states, telemetry signals, and SoulBox snapshots are all uniform structured arrays.
+TOON's sweet spot maps directly to Sena's prompt data shape — memory retrievals, agent states, telemetry signals, and SoulBox snapshots are all uniform structured arrays.
 
 #### Three-Way Serialization Split
 | Format | Used For |
@@ -653,13 +567,12 @@ PC works top-down: sacred content is always included, then fills remaining token
 #### Pre-Rot Threshold Is the Real Budget Ceiling
 PC never uses the model's advertised context window as its token budget. It uses `pre_rot_threshold` from the active ModelCapabilityProfile. A focused 300-token context frequently outperforms an unfocused 100,000-token context — what is removed matters as much as what is kept.
 
-```rust
-// bad — uses advertised limit
-let token_budget = context.model_profile.context_window;
+```python
+# bad — uses advertised limit
+token_budget = context.model_profile.context_window
 
-// good — uses proven rot threshold  
-let token_budget = context.model_profile.pre_rot_threshold
-  .saturating_sub(context.model_profile.output_reserve);
+# good — uses proven rot threshold
+token_budget = context.model_profile.pre_rot_threshold - context.model_profile.output_reserve
 ```
 
 #### Encoding Selection Utility — runtime TOON / JSON chooser
@@ -673,29 +586,19 @@ Responsibilities
 - Expose a stable API so Prompt Composer can call it synchronously or from an executor pool (see Concurrency rules, Section 12).
 
 Runtime contract / API (informal)
-
-```rust
-pub fn choose_encoding(
-    payload: &impl Serialize,
-    model_profile: &ModelCapabilityProfile,
-    options: Option<EsuOptions>,
-) -> EsuResult
-
-pub struct EsuOptions {
-    pub max_tokens_budget: Option<usize>,
-    pub prefer_tabular: bool,
-}
-
-pub struct EsuResult {
-    pub format: EncodingFormat,        // Toon | Json | Toml
-    pub encoded: String,               // encoded string ready for prompt assembly
-    pub toon_options: Option<ToonOptions>,
-    pub json_tokens: usize,
-    pub toon_tokens: Option<usize>,
-    pub savings_pct: Option<f32>,
-    pub reason: &'static str,
-}
-```
+- choose_encoding(payload: Any, model_profile: dict, options: Optional[dict] = None) -> dict
+  - Input:
+    - payload: the data structure to encode for the model
+    - model_profile: current model characteristics (effective_context_window, tokenizer_hint, structured_output capability)
+    - options: optional hints (max_tokens_budget, prefer_tabular)
+  - Output: {
+      "format": "TOON" | "JSON" | "TOML",
+      "encoded": str,                 # encoded string ready for prompt assembly
+      "options": dict,                # chosen encode options (e.g. {"indent":0})
+      "tokens": {"json": int, "toon": int | null},  # measured/estimated tokens
+      "savings_pct": float,           # percentage savings (json -> chosen)
+      "reason": str                   # human-readable rule that led to decision
+    }
 
 Default decision policy (recommended)
 - If payload is marked "sacred" (SoulBox, inferred intent) → always prefer TOML/JSON fidelity; do not TOON-encode sacred content unless explicitly configured.
@@ -738,7 +641,7 @@ Testing guidance
   - Validate that ESU-chosen encoding roundtrips and decodes back to the original payload where required (for structured output requests).
   - Validate that sacred payloads never lose fidelity when encoded/decoded.
 - Model-probe integration:
-  - Use ModelProbe (Section 6.3) signals (structured_output capability, tokenizer hints, practical context retention) to adjust ESU heuristics automatically per active model.
+  - Use ModelProbe (Section 6.2) signals (structured_output capability, tokenizer hints, practical context retention) to adjust ESU heuristics automatically per active model.
 
 Telemetry-driven policy tuning
 - Periodically run offline analysis on `pc.encoding_choice` events to:
@@ -748,37 +651,26 @@ Telemetry-driven policy tuning
 
 Implementation notes (for prompt-composer engineers)
 - ESU must be tiny and fast. The recommended implementation pattern:
-  - Provide a synchronous public API that calls a fast token counting function. Token counting is implemented via a lightweight Rust heuristic (character-to-token ratio) or a Rust tokenizer crate. Never use Python tiktoken from prompt-composer.
+  - Provide a synchronous public API that calls a fast token counting function. Token counting may be implemented via `tiktoken` (if available) or a lightweight heuristic.
   - Heavy checks and telemetry batching should be offloaded to background tasks or the CTP background priority tier.
   - Keep the deterministic decision rule and thresholds in config with sensible defaults and runtime override via PC options.
 - Where encoding may be slow or blocking, call ESU from an executor (`run_in_executor`) to satisfy CPU-bound rules (Section 12).
 
-#### Example implementation sketch
-```rust
-fn choose_encoding(
-    payload: &Value,
-    model_profile: &ModelCapabilityProfile,
-    opts: Option<EsuOptions>,
-) -> EsuResult {
-    if is_sacred(payload) {
-        return EsuResult::json(payload, "sacred_fidelity");
-    }
-    let json_str = serde_json::to_string(payload).unwrap_or_default();
-    let json_tokens = count_tokens(&json_str);
-    let toon_options = ToonOptions::compact();
-    match toon_format::encode(payload, &toon_options) {
-        Ok(toon_str) => {
-            let toon_tokens = count_tokens(&toon_str);
-            let save_threshold = config.esu.save_threshold; // default 0.85
-            if toon_tokens <= (json_tokens as f32 * save_threshold) as usize {
-                EsuResult::toon(toon_str, toon_options, json_tokens, toon_tokens, "savings_above_threshold")
-            } else {
-                EsuResult::json_str(json_str, json_tokens, "no_savings")
-            }
-        }
-        Err(_) => EsuResult::json_str(json_str, json_tokens, "toon_encode_failed"),
-    }
-}
+#### Example pseudocode
+```
+def choose_encoding(payload, model_profile, opts=None):
+    if is_sacred(payload): return {"format":"JSON","encoded":json.dumps(payload), ...}
+    json_tokens = count_tokens(json.dumps(payload, separators=(',',':')))
+    toon_opt = {"indent":0}
+    try:
+        toon_str = toon.encode(payload, toon_opt)
+        toon_tokens = count_tokens(toon_str)
+    except Exception:
+        toon_tokens = None
+    if toon_tokens and toon_tokens <= json_tokens * 0.85:
+        return {"format":"TOON","encoded":toon_str,"tokens":{"json":json_tokens,"toon":toon_tokens},"reason":"savings_above_threshold"}
+    else:
+        return {"format":"JSON","encoded":json.dumps(payload, separators=(',',':')),"tokens":{"json":json_tokens},"reason":"no_savings"}
 ```
 
 ### 7.4 Full Cognitive Flow
@@ -858,7 +750,7 @@ All telemetry is local. Nothing is transmitted externally.
 Every subsystem emitting telemetry must use this schema. No subsystem defines its own telemetry format.
 
 ### 8.5 Logging
-Logging is infrastructure, not an agent. Each subsystem logs locally using structured logging (Rust: `tracing` crate; Python/lora-manager: `structlog`). daemon-bus aggregates all subsystem log streams passively. The debug UI reads the unified log stream from daemon-bus. CTP may read the log stream as a telemetry input to detect and reason about error patterns. Log files are stored locally per subsystem under `~/.sena/logs/`.
+Logging is infrastructure, not an agent. Each subsystem logs locally using structured logging (Rust: tracing crate, Python: structlog). daemon-bus aggregates all subsystem log streams passively. The debug UI reads the unified log stream from daemon-bus. CTP may read the log stream as a telemetry input to detect and reason about error patterns. Log files are stored locally per subsystem under ~/.sena/logs/.
 
 ### 8.6 Evolution Events
 When Sena's behavior or personality shifts, a SoulBox evolution event is logged. Users can:
@@ -922,7 +814,7 @@ When daemon-bus detects a subsystem crash:
 | CTP | Reactive loop only, no proactive thoughts or anticipation |
 | memory-engine | Session-only memory, no persistence |
 | Prompt Composer | Fallback to minimal context prompt (SoulBox + intent only) |
-| inference | Sena informs user which model failed to load and why (OOM, missing file, etc.). Waits for inference to recover. No completions or streaming available until `INFERENCE_READY` re-fires. memory-engine embeddings continue unaffected (separate model). |
+| Llama.cpp | Sena informs user, waits for model to recover |
 | Platform layer | OS integrations disabled, core chat remains functional |
 | Tacet | Sena responds without persona expression, flat tone |
 | LoRA Manager | Sena runs on base model without adapter — memory system carries full personalization load. No user-visible impact |
@@ -1074,7 +966,7 @@ Sena uses OpenTelemetry for distributed tracing across subsystems. Traces propag
 **Enforcement:**
 Every subsystem that emits telemetry must validate its fields against this allowlist before emission. The `TelemetryEvent` proto schema enforces this structurally — the `payload` field is `map<string, string>` with no free-form text fields that could capture prompt content.
 
-Structured logs (`tracing` crate; `structlog` for lora-manager) follow the same rules. No log statement anywhere in the codebase includes raw user content, prompt text, or SoulBox values.
+Structured logs (tracing crate, structlog) follow the same rules. No log statement anywhere in the codebase includes raw user content, prompt text, or SoulBox values.
 
 All traces and logs are local. Nothing is transmitted externally. Any future opt-in telemetry upload (if ever implemented) requires explicit user consent per session, is off by default, and uploads only the allowed fields listed above.
 
@@ -1152,11 +1044,10 @@ Every process in Sena's process tree runs in true parallel — separate OS proce
 
 ```
 daemon-bus       ← dedicated OS process, always running
-inference        ← dedicated OS process, owns llama-cpp-rs in-process
-memory-engine    ← dedicated OS process, owns nomic-embed in-process
-ctp              ← dedicated OS process, always running
-agents           ← dedicated OS process, always running
-sena-ui          ← dedicated OS process, spawned on user activation
+memory-engine    ← dedicated OS process, always running
+sena-agents      ← dedicated OS process, always running
+  └── llama.cpp  ← dedicated subprocess, always pre-loaded
+sena-ui          ← dedicated OS process, spawned on demand
 platform/windows ← dedicated OS process, always running
 ```
 
@@ -1172,7 +1063,7 @@ These subsystems run in true parallel at all times. They must never be serialize
 | CTP thought generation + CTP queue evaluation | Separate async tasks within CTP | Generation and evaluation are independent pipelines |
 | memory-engine reads + CTP background writes | RwLock per tier — concurrent reads, serialized writes per tier | Multiple readers never block each other |
 | Telemetry writes + all other operations | Fire-and-forget async task | Telemetry must never block anything |
-| Multiple agent execution | Parallel dispatch via AgentRuntime router | Router can dispatch File + Screen + Process agents simultaneously |
+| Multiple agent execution | Parallel dispatch via Agno router | Router can dispatch File + Screen + Process agents simultaneously |
 | CTP memory queries | `tokio::join!` for short-term + long-term + episodic | Three memory tiers queried in parallel, results joined |
 | Tacet sub-agents (Persona, Heart, Reflection) | Parallel async tasks | Each sub-agent owns a separate concern with no shared mutable state |
 
@@ -1182,7 +1073,7 @@ These operations must never be parallelized. They require strict sequential exec
 
 | Operation | Why Synchronous |
 |---|---|
-| Cold start boot sequence | Each step depends on the previous. inference cannot serve completions before llama-cpp-rs loads. CTP cannot start before memory-engine and inference are ready |
+| Cold start boot sequence | Each step depends on the previous. llama-cpp-rs cannot load before sena-agents starts. CTP cannot start before memory-engine is ready |
 | SoulBox migration | Must complete fully before any subsystem reads SoulBox. No reads during migration |
 | daemon-bus escalation grant/revoke | Tier 2 exclusivity requires atomic check-and-grant. Concurrent grants violate the hierarchy |
 | Memory writes within a single tier | RwLock write lock is exclusive per tier. Two simultaneous writes to long-term memory are serialized |
@@ -1207,157 +1098,130 @@ Never write CPU-heavy loops inside an async block without yielding — this bloc
 
 | Operation | Language | Correct Pattern |
 |---|---|---|
-| Model inference | Rust | `tokio::task::spawn_blocking` — llama-cpp-rs is synchronous, never call on async runtime |
 | Memory consolidation (heavy) | Rust | `tokio::task::spawn_blocking` — offload to blocking thread pool |
-| TOON encoding of large context | Rust | `tokio::task::spawn_blocking` — toon-format crate encoding is CPU-bound |
-| Relevance score batch computation | Rust | `tokio::task::spawn_blocking` if batch is large, inline if small |
+| TOON encoding of large context | Python | `asyncio.get_event_loop().run_in_executor(None, toon_encode, data)` |
+| Relevance score batch computation | Python | `ProcessPoolExecutor` if batch is large, inline if small |
 | usearch vector search (large batch) | Rust | `tokio::task::spawn_blocking` — offload to blocking thread pool |
 | redb graph traversal (large) | Rust | `tokio::task::spawn_blocking` — offload to blocking thread pool |
-| LoRA training | Python | `ProcessPoolExecutor` via `run_in_executor` — CPU-bound, must not block asyncio loop |
 
 ### 12.9 Python Concurrency Model
 
-Python's asyncio is single-threaded concurrency, not parallelism. lora-manager is the only Python process in Sena. All other subsystems are Rust on tokio.
+Python's asyncio is single-threaded concurrency, not parallelism. For Sena's Python subsystems:
 
-For lora-manager specifically:
+- **I/O-bound work** (gRPC calls, memory queries, llama.cpp API calls) — `async/await` with asyncio, no threads needed
+- **CPU-bound work** (encoding, scoring, graph traversal) — `run_in_executor` with `ProcessPoolExecutor` for true parallelism
+- **CTP's continuous loop** — single asyncio event loop with `asyncio.create_task` for concurrent thought generation and evaluation
+- **Multiple agents executing simultaneously** — `asyncio.gather()` for parallel agent dispatch with result collection
 
-- **I/O-bound work** (gRPC calls, daemon-bus events, file reads) — `async/await` with asyncio, no threads needed
-- **CPU-bound work** (LoRA training, adapter quality scoring) — `run_in_executor` with `ProcessPoolExecutor` for true parallelism
-
-Never use `threading.Thread` directly in lora-manager. Always use asyncio primitives or `ProcessPoolExecutor` through `run_in_executor`.
+Never use `threading.Thread` directly in Python subsystems. Always use asyncio primitives or `ProcessPoolExecutor` through `run_in_executor`.
 
 ---
 
 ## 13. Tech Stack
 
-
 ### 13.1 Language Architecture
 
 | Layer | Language | Responsibility |
 |---|---|---|
-| Core engine, inference, hot paths | Rust | daemon-bus, inference, memory-engine, model-probe, CTP, prompt-composer, SoulBox, agents |
-| LoRA training | Python | lora-manager — no Rust alternative at parity for LoRA fine-tuning |
-| Architectural index | Python + Rust | codebase-context — Python for build-time index generation, Rust for runtime status updates |
-| UI | Freya (Rust) | Skia-rendered, native GPU, no webview, React-like component model |
+| Agent orchestration and AI logic | Python | Agno, CTP, Prompt Composer, agents |
+| Core engine and hot paths | Rust | Memory engine, daemon-bus, performance-critical paths |
+| UI | Freya | Skia-rendered, native GPU, no webview, React-like component model |
 | Windows OS hooks | C#/.NET | WinRT/Win32 system integration |
 | macOS OS hooks (V3) | Swift | AppKit / CoreServices |
 | Linux OS hooks (V3) | Rust | D-Bus / X11 / Wayland |
 
----
+Each language owns exactly one domain and never bleeds into another. Python to Rust via PyO3. All inter-process communication via gRPC.
 
 ### 13.2 Process Architecture
 
 ```
-daemon-bus (Rust)                   ← root process, never restarted externally
-├── inference (Rust)                ← owns llama-cpp-rs, completion model, InferenceService gRPC
-├── memory-engine (Rust)            ← ech0, nomic-embed in-process, MemoryService gRPC
-├── model-probe (Rust)              ← boot-time only, exits after MODEL_PROFILE_READY
-├── ctp (Rust)                      ← continuous thought loop, CtpService gRPC
-├── prompt-composer (Rust)          ← TOON + context assembly, PcService gRPC
-├── soulbox (Rust)                  ← encryption, identity, SoulBoxService gRPC
-├── agents (Rust)                   ← custom framework, 9 built-in agents, AgentService gRPC
-├── lora-manager (Python)           ← only Python process, LoRA training lifecycle
-├── codebase-context (Python+Rust)  ← build-time index + runtime status
-├── sena-ui (Freya/Rust)            ← spawned only on user activation
-└── platform/windows (C#)          ← OS hooks, WinRT/Win32
+daemon-bus (Rust)              <- root process, boots on startup
+├── memory-engine (Rust)       <- concurrent memory, owns its own locks
+├── sena-agents (Python)       <- Agno, CTP, PC, Tacet, Reasoning, agents
+│   └── llama.cpp (subprocess)    <- pre-loaded on boot
+├── sena-ui (Freya)            <- spawned only when user opens window
+└── platform/ (C# on Windows) <- OS hooks, gRPC client
 ```
-
-lora-manager is the only Python process. All other subsystems are Rust communicating
-via gRPC. Python is used exclusively where no Rust alternative exists at parity.
-
----
 
 ### 13.3 Project Structure
 
 ```
 sena/
 ├── .github/
-│   ├── copilot-instructions.md
+│   ├── copilot-instructions.md               # Global rules — applies to entire repo
 │   └── instructions/
-│       ├── daemon-bus.instructions.md
-│       ├── inference.instructions.md         ← new
-│       ├── memory-engine.instructions.md
-│       ├── ctp.instructions.md
-│       ├── prompt-composer.instructions.md
-│       ├── agents.instructions.md
-│       ├── tacet.instructions.md
-│       ├── soulbox.instructions.md
-│       ├── ui.instructions.md
-│       ├── model-probe.instructions.md
-│       └── platform-windows.instructions.md
-├── daemon-bus/         # Rust — root process, gRPC server, event bus
-├── inference/          # Rust — llama-cpp-rs, InferenceService        ← new
-├── memory-engine/      # Rust — concurrent tiered memory, ech0
-├── model-probe/        # Rust — runtime model capability detection
-├── ctp/                # Rust — continuous thought processing
-├── prompt-composer/    # Rust — prompt assembly, TOON encoding
-├── soulbox/            # Rust — encryption, identity, schema, migrations
-├── agents/             # Rust — custom framework + 9 built-in agents
-│   ├── src/
-│   │   ├── framework/  # Agent trait, Router, ToolLoop, SandboxEnforcer
-│   │   ├── router/
-│   │   ├── memory/
-│   │   ├── file/
-│   │   ├── screen/
-│   │   ├── process/
-│   │   ├── browser/
-│   │   ├── peripheral/
-│   │   ├── tacet/
-│   │   │   ├── persona/
-│   │   │   ├── heart/
-│   │   │   └── reflection/
-│   │   └── reasoning/
-├── sena-agent-sdk/     # Rust OSS crate — public Agent trait + types for community agents ← new
-├── lora-manager/       # Python — LoRA training, versioning, quality gating
-├── codebase-context/   # Python+Rust — architectural self-awareness
-├── ui/                 # Freya — all UI components
+│       ├── daemon-bus.instructions.md         # applyTo: daemon-bus/**
+│       ├── memory-engine.instructions.md      # applyTo: memory-engine/**
+│       ├── ctp.instructions.md                # applyTo: ctp/**
+│       ├── prompt-composer.instructions.md    # applyTo: prompt-composer/**
+│       ├── agents.instructions.md             # applyTo: agents/**
+│       ├── tacet.instructions.md              # applyTo: agents/tacet/**
+│       ├── soulbox.instructions.md            # applyTo: soulbox/**
+│       ├── ui.instructions.md                 # applyTo: ui/**
+│       ├── model-probe.instructions.md        # applyTo: model-probe/**
+│       └── platform-windows.instructions.md  # applyTo: platform/windows/**
+├── daemon-bus/
+│   ├── proto/             # Single source of truth for all .proto files
+│   └── src/               # Rust — root process, gRPC server, event bus
+├── memory-engine/         # Rust — concurrent tiered memory system
+├── model-probe/           # Python — runtime model capability detection
+├── lora-manager/          # Python — idle-time LoRA adapter training and lifecycle
+└── codebase-context/      # Python/Rust — architectural self-awareness index
+├── ctp/                   # Python — Continuous Thought Processing
+├── prompt-composer/       # Python — dynamic prompt assembly + TOON encoding
+├── agents/
+│   ├── router/
+│   ├── memory/
+│   ├── file/
+│   ├── screen/
+│   ├── process/
+│   ├── browser/
+│   ├── peripheral/
+│   ├── tacet/
+│   │   ├── persona/
+│   │   ├── heart/
+│   │   └── reflection/
+│   └── reasoning/
+├── soulbox/
+│   └── migrations/        # Versioned migration scripts
+├── ui/                    # Freya — all UI components (Skia-rendered)
 └── platform/
-  ├── windows/        # C#/.NET — WinRT/Win32 (V1)
-  ├── macos/          # Swift — AppKit/CoreServices (V3)
-  └── linux/          # Rust — D-Bus/X11/Wayland (V3)
+    ├── windows/           # C#/.NET — WinRT/Win32 hooks (V1)
+    ├── macos/             # Swift — AppKit/CoreServices (V3)
+    └── linux/             # Rust — D-Bus/X11/Wayland (V3)
 ```
-
----
 
 ### 13.4 Named Extractable Subsystems
 
 | Subsystem | Language | Extractable | Description |
 |---|---|---|---|
 | daemon-bus | Rust | Yes | Root process, gRPC event bus, process supervisor, priority arbitrator |
-| inference | Rust | Yes | Owns llama-cpp-rs, serves InferenceService gRPC — single owner of all completion model VRAM |
-| memory-engine | Rust | Yes | Concurrent tiered memory with RwLock + priority queue, backed by ech0 |
-| model-probe | Rust | Yes | Boot-time model capability detection — builds ModelCapabilityProfile and HardwareProfile |
-| CTP | Rust | Yes | Continuous Thought Processing — proactive cognitive loop, three parallel async pipelines |
-| prompt-composer | Rust | Yes | Dynamic prompt assembly + TOON encoding via toon-format crate |
-| SoulBox | Rust | No | Sena-specific identity and personalization engine — Argon2id + AES-256-GCM + DPAPI |
-| agents | Rust | Partial | Custom agent framework (extractable as sena-agent-sdk) + 9 Sena built-in agents (not extractable) |
-| sena-agent-sdk | Rust | Yes | Public Agent trait, AgentManifest, AgentTask, AgentResult — OSS SDK for community agent authors |
-| lora-manager | Python | Yes | Idle-time LoRA adapter training, versioning, quality gating, deployment |
-| codebase-context | Python + Rust | Yes | Build-time architectural index + runtime subsystem status |
-| ech0 | Rust | Yes | Local-first knowledge graph memory crate. Standalone OSS. Hybrid redb + usearch, A-MEM, contradiction detection, importance decay, provenance |
+| memory-engine | Rust | Yes | Concurrent tiered memory with RwLock + priority queue |
+| CTP | Python | Yes | Continuous Thought Processing — proactive cognitive loop |
+| prompt-composer | Python | Yes | Dynamic prompt assembly + TOON encoding |
+| Tacet | Python | Yes | Persona, heart, reflection — identity runtime |
+| model-probe | Rust | Yes | Runtime model capability detection — builds ModelCapabilityProfile and HardwareProfile via probe battery |
+| SoulBox | Python | No | Sena-specific personalization and identity engine |
+| lora-manager | Python | Yes | Idle-time LoRA adapter training, versioning, quality gating, and deployment |
+| codebase-context | Python + Rust | Yes | Build-time architectural index + runtime subsystem status layer |
+| ech0 | Rust | Yes | Local-first knowledge graph memory crate. Standalone OSS project consumed by memory-engine. Hybrid redb + usearch storage, A-MEM dynamic linking, contradiction detection, importance decay, provenance tracking. |
 
+### 13.5 AI and Agent Layer
 
-### 13.5 Agent Framework
-
-Sena uses a custom thin Rust agent framework — no third-party orchestration library.
-
-| Layer | Description |
+| Tool | Role |
 |---|---|
-| `Agent` trait | Stable public contract. `manifest() -> &AgentManifest` + `run(task, context) -> Result<AgentResult, AgentError>`. Never changes post-V1. |
-| `AgentRuntime` | Framework internals: Router, ToolLoop, SandboxEnforcer. Manages warm agent instances, parallel dispatch, result merging. |
-| `sena-agent-sdk` | OSS crate exposing `Agent` trait + supporting types for community agent authors. Community agents compile to `.dll` and load dynamically. |
-| `manifest.toml` | Every agent (built-in and community) declares identity, permissions, and required model_id here. |
-
-Built-in agents (~600 lines of core framework code) implement `Agent` in Rust. Community agents implement the same trait via `sena-agent-sdk` and are reviewed by `AgentScanner` before reaching the runtime.
+| Agno v2.5+ | Agent orchestration. Team execution modes: `route` (Router → sub-agents), `coordinate` (parallel dispatch with result merge), `broadcast` (fan-out), `tasks` (sequential pipeline). Sena's Router uses `route` mode. ~3μs instantiation, native ReasoningTools, 23+ LLM providers including Ollama. Human-in-the-loop approval gates available for dangerous permission workflows. |
 
 ### 13.6 Memory Stack
 
 | Layer | Tool | Purpose |
 |---|---|---|
-| Memory engine | ech0 | Local-first Rust knowledge graph memory crate. Hybrid redb (graph) + usearch (vector) storage. A-MEM dynamic linking, contradiction detection, importance decay, provenance tracking. |
+| Memory engine | ech0 | Local-first Rust knowledge graph memory crate. Hybrid redb (graph) + usearch (vector) storage. A-MEM dynamic linking, contradiction detection, importance decay, provenance tracking. Replaces Python Cognee dependency entirely. Phase 1. |
 | Graph database | redb | Pure Rust embedded key-value store. Used internally by ech0 for node/edge/adjacency storage. Stable file format, transactional writes. |
 | Vector / semantic search | usearch | Pure Rust approximate nearest neighbor library. Used internally by ech0 for embedding storage and similarity search. No external process. |
-| Embedding model | nomic-embed-text-v1.5 Q4 | Loaded in-process by memory-engine via llama-cpp-rs. ~300MB VRAM. Separate from completion model. |
+| Structured data | SQLite | Telemetry, agent state, SoulBox schema |
+
+**Migration note:** Python Cognee + LadybugDB + LanceDB are replaced by ech0 in Phase 1. llama.cpp server mode acts as interim inference interface for any remaining Python subsystems during migration. llama.cpp server mode is retired once ech0 covers all memory-engine needs.
 
 ### 13.7 IPC and Event Bus
 
@@ -1372,11 +1236,12 @@ Built-in agents (~600 lines of core framework code) implement `Agent` in Rust. C
 
 | Category | Tool | Usage |
 |---|---|---|
-| Prompt serialization | TOON (`toon-format` crate) | All structured data fed into the model via PC |
-| Config serialization | `toml` crate (Rust) / `tomllib` (Python/lora-manager) | Human-edited configs, SoulBox, agent manifests |
+| Prompt serialization | TOON (toon-format/toon-python) | All data fed into the model via PC |
+| Config serialization | TOML-python | Human-edited configs, SoulBox, agent manifests |
 | Internal data | JSON | Non-uniform structures only |
-| Rust structured logging | `tracing` crate | Per-subsystem structured log output |
-| Python structured logging | `structlog` | lora-manager only |
+| Python to Rust bridge | PyO3 | Cross-language function calls |
+| Rust structured logging | tracing crate | Per-subsystem structured log output |
+| Python structured logging | structlog | Per-subsystem structured log output |
 | Distributed tracing | OpenTelemetry | Cross-subsystem request tracing. Rust: `tracing-opentelemetry`. Python: `opentelemetry-sdk`. Local dev: Jaeger |
 
 **Observability requirements:**
@@ -1438,7 +1303,7 @@ Every subsystem ships with its own test suite. The following testing strategies 
 | Prompt injection tests | platform/windows + agents/ | Assert OS input sanitization blocks known indirect injection patterns before they reach model context |
 | Context rot regression | model-probe/ | Assert pre-rot threshold detection is accurate per model family |
 | Boot failure tests | daemon-bus/ | Assert correct boot halt and user notification behavior when required subsystems fail to signal ready |
-| Graph extraction capability tests | model-probe/ | Assert graph extraction capability probe correctly gates ech0 graph vs vector-only mode |
+| Graph extraction capability tests | model-probe/ | Assert graph extraction capability probe correctly gates Cognee graph vs vector-only mode |
 | TOON parser fuzz tests | prompt-composer/ | Assert TOON encoder/decoder handles malformed and adversarial input without panicking or producing incorrect output |
 | Proto boundary fuzz tests | daemon-bus/ | Assert proto parsing handles malformed messages at every gRPC boundary without crashing or leaking state |
 | Trace redaction tests | All subsystems | Assert no telemetry or log emission contains raw prompt content, SoulBox values, or user-generated text |
@@ -1477,42 +1342,22 @@ Every subsystem ships with its own test suite. The following testing strategies 
 ## 16. Phased Roadmap
 
 ### Phase 1 — Foundation (Current)
-
-**Milestone A — Sena is alive (no conversation required)**
 - [x] daemon-bus — root process, gRPC server, event bus, priority arbitrator
-- [x] model-probe — runtime model capability detection, HardwareProfile, ModelCapabilityProfile
-- [x] ech0 — local-first knowledge graph memory crate
-- [x] memory-engine — concurrent tiered memory, ech0 integration, MemoryService gRPC
-- [ ] inference — llama-cpp-rs ownership, InferenceService gRPC, OOM handling, model registry
-- [ ] CTP — continuous thought loop, relevance evaluator, thought queue, memory consolidation
-
-**Debug UI — built immediately after Milestone A**
-- [ ] Debug UI (Freya) — subsystem health, VRAM allocations, CTP thought stream live feed, memory tier stats, event bus monitor, inference token/s
-- Rationale: built here so Milestone B and beyond are developed with full observability. Grows with each milestone.
-
-**Milestone B — Sena can be spoken to**
-- [ ] prompt-composer — TOON encoding pipeline, ESU, context window management
-- [ ] reactive-loop — user input routing, agent dispatch, response delivery
-- Debug UI gains: prompt assembly trace, TOON encoding output, conversation turn timeline, context window usage
-
-**Milestone C — Sena has identity**
-- [ ] SoulBox — schema, encryption (Argon2id + AES-256-GCM + DPAPI), migration system, cold start
-- [ ] Tacet — persona, heart, reflection sub-agents
-- Debug UI gains: SoulBox evolution events, trait delta feed, persona output trace
-
-**Milestone D — Sena can act**
-- [ ] agents framework — Agent trait, Router, ToolLoop, SandboxEnforcer, sena-agent-sdk
-- [ ] AgentScanner — community agent review pipeline (manifest + PE import analysis + user approval + registry)
-- [ ] Agent registry — all 9 built-in agents scaffolded
-- [ ] Basic OS hooks — file system, process, screen
-- Debug UI gains: agent dispatch trace, tool call log, sandbox status, AgentScanner review feed
-
-**Infrastructure (spans all milestones)**
-- [ ] Error recovery + degraded mode per subsystem
+- [x] ech0 — local-first knowledge graph memory crate (consumed by memory-engine)
+- [x] memory-engine — concurrent tiered memory system
+- [ ] CTP — continuous thought processing, relevance evaluator, thought queue
+- [ ] prompt-composer — dynamic prompt assembly, TOON encoding pipeline
+- [ ] SoulBox schema definition + migration system
+- [ ] Agent registry — all 9 router targets scaffolded
+- [ ] Tacet subsystem — persona, heart, reflection sub-agents
+- [ ] Reasoning agent
+- [ ] Model abstraction layer (GGUF model loading via llama-cpp-rs)
+- [ ] Basic OS hooks (file system, process, screen)
+- [ ] Hierarchy and priority system in daemon-bus
+- [ ] Error recovery + degraded mode
 - [ ] Structured logging per subsystem
-- [ ] Proto versioning — buf snapshot established after first stable proto commit
-
----
+- [ ] Chat interface
+- [ ] Debug / telemetry UI
 
 ### Phase 2 — Emergence
 - [ ] Full SoulBox evolution engine
@@ -1523,17 +1368,18 @@ Every subsystem ships with its own test suite. The following testing strategies 
 - [ ] Extended OS integrations (browser, peripherals, camera/mic)
 - [ ] Agent capability tier system
 - [ ] CTP autonomy controls in SoulBox
-- [ ] Full test suite across all subsystems
-- [ ] lora-manager — idle-time adapter training pipeline
-- [ ] codebase-context — build-time index generation + runtime status integration
-- [ ] Reasoning gap detection in model-probe
+- [ ] Full test suite across all strategies
+- [ ] LoRA Manager — idle-time adapter training pipeline
+- [ ] CodebaseContext — build-time index generation + runtime status integration
+- [ ] Reasoning gap detection in ModelProbe
 - [ ] Adapter quality gating pipeline
 - [ ] LoRA adapter versioning and per-model storage
-- [ ] Multi-model inference registry — Mid/High tier parallel model loading
-- [ ] Injectable architecture design — pending Doc-to-LoRA community adoption
+- [ ] Migrate to llama-cpp-rs as primary inference backend, deprecate Ollama runtime dependency
+- [ ] ech0 V1 stable — memory-engine migrates from Python Cognee to ech0
+- [ ] llama.cpp server mode retired once ech0 covers all memory-engine needs
+- [ ] Hardware tier detection live in ModelProbe — HardwareProfile published at boot
+- [ ] Injectable architecture design — pending Doc-to-LoRA community adoption and LoRA stacking research maturity
 - [ ] New hardware milestone (16GB VRAM / 32GB RAM) — unlocks injectable architecture V2
-
----
 
 ### Phase 3 — Expansion
 - [ ] macOS support
