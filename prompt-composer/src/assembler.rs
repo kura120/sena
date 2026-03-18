@@ -119,10 +119,16 @@ pub async fn assemble(
     context: &PromptContext,
     config: &Config,
 ) -> Result<AssembleResult, PcError> {
+    // Per-request output_reserve from model profile takes precedence over config default.
+    let output_reserve = if context.model_profile.output_reserve > 0 {
+        context.model_profile.output_reserve
+    } else {
+        config.budget.output_reserve_tokens
+    };
     let budget = context
         .model_profile
         .context_window
-        .saturating_sub(config.budget.output_reserve_tokens) as usize;
+        .saturating_sub(output_reserve) as usize;
 
     // ── Encode sacred content (always JSON) ─────────────────────────────
     let sacred_options = EsuOptions { is_sacred: true };
@@ -158,102 +164,110 @@ pub async fn assemble(
     }
 
     // ── Encode optional tiers ───────────────────────────────────────────
-    // Each tier is encoded via ESU in the drop priority order.
+    // Tiers are encoded in the order specified by config.drop_order.tiers.
+    // The first tier in the list is dropped first when budget is tight.
     // TOON encoding is CPU-bound, so we use spawn_blocking.
 
     let mut optional_parts: Vec<PromptPart> = Vec::new();
 
-    // Encode telemetry signals
-    if !context.telemetry_signals.is_empty() {
-        let esu_config = config.esu.clone();
-        let telemetry = context.telemetry_signals.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            choose_encoding(&telemetry, &esu_config, EsuOptions { is_sacred: false })
-        })
-        .await
-        .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
+    for tier_name in &config.drop_order.tiers {
+        let part = match tier_name.as_str() {
+            "telemetry" => {
+                if context.telemetry_signals.is_empty() {
+                    continue;
+                }
+                let esu_config = config.esu.clone();
+                let telemetry = context.telemetry_signals.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    choose_encoding(&telemetry, &esu_config, EsuOptions { is_sacred: false })
+                })
+                .await
+                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
 
-        optional_parts.push(PromptPart {
-            tier: "telemetry".to_string(),
-            encoded: result.encoded,
-            tokens: result.json_tokens.max(result.toon_tokens.unwrap_or(result.json_tokens)),
-        });
-        // Use actual token count of chosen encoding
-        if let Some(last) = optional_parts.last_mut() {
-            last.tokens = token_counter::count_tokens(&last.encoded);
-        }
-    }
+                let tokens = token_counter::count_tokens(&result.encoded);
+                PromptPart {
+                    tier: "telemetry".to_string(),
+                    encoded: result.encoded,
+                    tokens,
+                }
+            }
+            "os_context" => {
+                let esu_config = config.esu.clone();
+                let os_ctx = context.os_context.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    choose_encoding(&os_ctx, &esu_config, EsuOptions { is_sacred: false })
+                })
+                .await
+                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
 
-    // Encode OS context
-    {
-        let esu_config = config.esu.clone();
-        let os_ctx = context.os_context.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            choose_encoding(&os_ctx, &esu_config, EsuOptions { is_sacred: false })
-        })
-        .await
-        .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
+                let tokens = token_counter::count_tokens(&result.encoded);
+                PromptPart {
+                    tier: "os_context".to_string(),
+                    encoded: result.encoded,
+                    tokens,
+                }
+            }
+            "short_term" => {
+                if context.short_term.is_empty() {
+                    continue;
+                }
+                let esu_config = config.esu.clone();
+                let short_term = context.short_term.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    choose_encoding(&short_term, &esu_config, EsuOptions { is_sacred: false })
+                })
+                .await
+                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
 
-        let tokens = token_counter::count_tokens(&result.encoded);
-        optional_parts.push(PromptPart {
-            tier: "os_context".to_string(),
-            encoded: result.encoded,
-            tokens,
-        });
-    }
+                let tokens = token_counter::count_tokens(&result.encoded);
+                PromptPart {
+                    tier: "short_term".to_string(),
+                    encoded: result.encoded,
+                    tokens,
+                }
+            }
+            "long_term" => {
+                if context.long_term.is_empty() {
+                    continue;
+                }
+                let esu_config = config.esu.clone();
+                let long_term = context.long_term.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    choose_encoding(&long_term, &esu_config, EsuOptions { is_sacred: false })
+                })
+                .await
+                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
 
-    // Encode short-term memory
-    if !context.short_term.is_empty() {
-        let esu_config = config.esu.clone();
-        let short_term = context.short_term.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            choose_encoding(&short_term, &esu_config, EsuOptions { is_sacred: false })
-        })
-        .await
-        .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
+                let tokens = token_counter::count_tokens(&result.encoded);
+                PromptPart {
+                    tier: "long_term".to_string(),
+                    encoded: result.encoded,
+                    tokens,
+                }
+            }
+            "episodic" => {
+                if context.episodic.is_empty() {
+                    continue;
+                }
+                let esu_config = config.esu.clone();
+                let episodic = context.episodic.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    choose_encoding(&episodic, &esu_config, EsuOptions { is_sacred: false })
+                })
+                .await
+                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
 
-        let tokens = token_counter::count_tokens(&result.encoded);
-        optional_parts.push(PromptPart {
-            tier: "short_term".to_string(),
-            encoded: result.encoded,
-            tokens,
-        });
-    }
+                let tokens = token_counter::count_tokens(&result.encoded);
+                PromptPart {
+                    tier: "episodic".to_string(),
+                    encoded: result.encoded,
+                    tokens,
+                }
+            }
+            _ => continue,
+        };
 
-    // Encode long-term memory
-    if !context.long_term.is_empty() {
-        let esu_config = config.esu.clone();
-        let long_term = context.long_term.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            choose_encoding(&long_term, &esu_config, EsuOptions { is_sacred: false })
-        })
-        .await
-        .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
-
-        let tokens = token_counter::count_tokens(&result.encoded);
-        optional_parts.push(PromptPart {
-            tier: "long_term".to_string(),
-            encoded: result.encoded,
-            tokens,
-        });
-    }
-
-    // Encode episodic memory
-    if !context.episodic.is_empty() {
-        let esu_config = config.esu.clone();
-        let episodic = context.episodic.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            choose_encoding(&episodic, &esu_config, EsuOptions { is_sacred: false })
-        })
-        .await
-        .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
-
-        let tokens = token_counter::count_tokens(&result.encoded);
-        optional_parts.push(PromptPart {
-            tier: "episodic".to_string(),
-            encoded: result.encoded,
-            tokens,
-        });
+        optional_parts.push(part);
     }
 
     // ── Drop lowest-priority tiers until total fits budget ──────────────
@@ -422,10 +436,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_sacred_overflow_returns_error() {
-        let mut config = test_config();
-        // Set an impossibly small budget
-        config.budget.output_reserve_tokens = 4090;
-        let context = test_context();
+        let config = test_config();
+        let mut context = test_context();
+        // Set model profile with impossibly high output reserve to leave tiny budget
+        context.model_profile.output_reserve = 4090;
         // Context window is 4096, reserve is 4090, leaving budget of 6 tokens
         // Sacred content will definitely overflow 6 tokens
         let result = assemble(&context, &config).await;
@@ -508,7 +522,13 @@ mod tests {
     async fn test_token_count_within_budget() {
         let config = test_config();
         let context = test_context();
-        let budget = context.model_profile.context_window - config.budget.output_reserve_tokens;
+        // Budget uses model_profile.output_reserve when > 0, otherwise config default
+        let output_reserve = if context.model_profile.output_reserve > 0 {
+            context.model_profile.output_reserve
+        } else {
+            config.budget.output_reserve_tokens
+        };
+        let budget = context.model_profile.context_window - output_reserve;
         let result = assemble(&context, &config).await.expect("should assemble");
         assert!(
             result.token_count <= budget,

@@ -489,9 +489,9 @@ service InferenceService {
 
 message PromptContextProto {
   string soulbox_snapshot_json = 1;
-  repeated MemoryEntry short_term = 2;
-  repeated MemoryEntry long_term = 3;
-  repeated MemoryEntry episodic = 4;
+  repeated PcMemoryEntry short_term = 2;
+  repeated PcMemoryEntry long_term = 3;
+  repeated PcMemoryEntry episodic = 4;
   string os_context_json = 5;
   string model_id = 6;
   uint32 context_window = 7;
@@ -501,7 +501,7 @@ message PromptContextProto {
   repeated TelemetrySignal telemetry_signals = 11;
 }
 
-message MemoryEntry {
+message PcMemoryEntry {
   string node_id = 1;
   string summary = 2;
   float score = 3;

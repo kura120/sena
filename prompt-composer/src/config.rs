@@ -127,9 +127,8 @@ format = "json"
 
     #[test]
     fn test_config_load_valid() {
-        let temp_dir = std::env::temp_dir().join("pc_config_valid_test");
-        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
-        let config_path = temp_dir.join("prompt-composer.toml");
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config_path = temp_dir.path().join("prompt-composer.toml");
         let mut file = std::fs::File::create(&config_path).expect("create file");
         file.write_all(VALID_TOML.as_bytes()).expect("write file");
 
@@ -139,18 +138,15 @@ format = "json"
         assert_eq!(config.budget.output_reserve_tokens, 512);
         assert_eq!(config.drop_order.tiers.len(), 5);
         assert!(config.telemetry.emit_encoding_choices);
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_config_save_threshold_in_range() {
-        let temp_dir = std::env::temp_dir().join("pc_config_threshold_test");
-        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
 
         // Test threshold = 0.0 (invalid)
         let bad_toml = VALID_TOML.replace("save_threshold = 0.15", "save_threshold = 0.0");
-        let config_path = temp_dir.join("prompt-composer.toml");
+        let config_path = temp_dir.path().join("prompt-composer.toml");
         std::fs::write(&config_path, &bad_toml).expect("write file");
         let result = Config::load(&config_path);
         assert!(result.is_err());
@@ -162,23 +158,18 @@ format = "json"
         std::fs::write(&config_path, &bad_toml).expect("write file");
         let result = Config::load(&config_path);
         assert!(result.is_err());
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_config_output_reserve_nonzero() {
-        let temp_dir = std::env::temp_dir().join("pc_config_reserve_test");
-        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
 
         let bad_toml = VALID_TOML.replace("output_reserve_tokens = 512", "output_reserve_tokens = 0");
-        let config_path = temp_dir.join("prompt-composer.toml");
+        let config_path = temp_dir.path().join("prompt-composer.toml");
         std::fs::write(&config_path, &bad_toml).expect("write file");
         let result = Config::load(&config_path);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("output_reserve_tokens"));
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
