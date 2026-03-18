@@ -34,6 +34,8 @@ pub struct ExpiryWindows {
     pub high_relevance_secs: u64,
     pub medium_relevance_secs: u64,
     pub low_relevance_secs: u64,
+    pub high_score_cutoff: f32,
+    pub medium_score_cutoff: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,6 +126,22 @@ impl Config {
             self.default_weights.idle_curiosity,
         )?;
 
+        // Expiry score cutoffs must be ordered: high > medium > 0.0
+        if self.expiry_windows.high_score_cutoff <= self.expiry_windows.medium_score_cutoff {
+            return Err(CtpError::ConfigValidation {
+                field: "expiry_windows.high_score_cutoff".into(),
+                reason: format!(
+                    "must be greater than medium_score_cutoff ({}), got {}",
+                    self.expiry_windows.medium_score_cutoff,
+                    self.expiry_windows.high_score_cutoff
+                ),
+            });
+        }
+        validate_positive_f32(
+            "expiry_windows.medium_score_cutoff",
+            self.expiry_windows.medium_score_cutoff,
+        )?;
+
         // Queue max_depth must be > 0
         if self.queue.max_depth == 0 {
             return Err(CtpError::ConfigValidation {
@@ -202,6 +220,8 @@ idle_10min = 0.3
 high_relevance_secs = 300
 medium_relevance_secs = 120
 low_relevance_secs = 30
+high_score_cutoff = 0.8
+medium_score_cutoff = 0.4
 
 [default_weights]
 urgency = 0.9

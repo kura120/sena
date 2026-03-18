@@ -47,18 +47,22 @@ impl TelemetryEvent {
 }
 
 /// Spawn all three pipelines as independent tokio tasks.
-/// Returns three JoinHandles that must be stored until shutdown.
+/// Returns three JoinHandles that must be stored until shutdown, plus the
+/// telemetry sender that feeds the generation pipeline. The sender must be
+/// held by the caller — dropping it closes the channel and stops generation.
+/// In Phase 1, no real telemetry is wired; the sender is held but unused.
 pub fn spawn_all(
     config: Arc<Config>,
     thought_queue: Arc<ThoughtQueue>,
     activity_monitor: Arc<ActivityMonitor>,
     daemon_bus_address: String,
-) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
+) -> (
+    JoinHandle<()>,
+    JoinHandle<()>,
+    JoinHandle<()>,
+    tokio::sync::mpsc::Sender<TelemetryEvent>,
+) {
     let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::channel::<TelemetryEvent>(256);
-
-    // Store the sender so it can be wired to real telemetry later.
-    // For Phase 1, the channel receives nothing — generation pipeline yields waiting.
-    let _telemetry_sender = telemetry_tx;
 
     let generation_handle = {
         let config = Arc::clone(&config);
@@ -87,7 +91,7 @@ pub fn spawn_all(
         })
     };
 
-    (generation_handle, evaluation_handle, consolidation_handle)
+    (generation_handle, evaluation_handle, consolidation_handle, telemetry_tx)
 }
 
 /// Generation pipeline — reads telemetry stream, computes relevance scores,
@@ -316,6 +320,8 @@ mod tests {
                 high_relevance_secs: 300,
                 medium_relevance_secs: 120,
                 low_relevance_secs: 30,
+                high_score_cutoff: 0.8,
+                medium_score_cutoff: 0.4,
             },
             default_weights: DefaultWeights {
                 urgency: 0.9,

@@ -180,7 +180,7 @@ async fn async_main() -> i32 {
     let _memory_address = memory_address;
 
     // ── Step 9: Spawn three pipelines ───────────────────────────────────
-    let (generation_handle, evaluation_handle, consolidation_handle) = spawn_all(
+    let (generation_handle, evaluation_handle, consolidation_handle, _telemetry_tx) = spawn_all(
         Arc::clone(&config),
         Arc::clone(&thought_queue),
         Arc::clone(&activity_monitor),
@@ -301,7 +301,9 @@ async fn wait_for_boot_prerequisites(
             match stream.message().await {
                 Ok(Some(bus_event)) => {
                     if bus_event.topic == i32::from(EventTopic::TopicBootSignal) {
-                        // Check boot signal by parsing source subsystem
+                        // TODO: decode BootSignal enum from payload once daemon-bus
+                        // wire format is finalized. Currently matching by source_subsystem
+                        // string as a Phase 1 approximation.
                         match bus_event.source_subsystem.as_str() {
                             "memory_engine" | "memory-engine" => {
                                 memory_engine_ready = true;

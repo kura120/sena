@@ -105,10 +105,11 @@ impl ThoughtQueue {
 
 /// Compute the expiry instant for a thought based on its score and config.
 /// High scores get longer expiry windows; low scores expire faster.
+/// Score cutoffs come from config — never hardcoded.
 pub fn expiry_for_score(score: f32, config: &ExpiryWindows) -> Instant {
-    let duration_secs = if score >= 0.8 {
+    let duration_secs = if score >= config.high_score_cutoff {
         config.high_relevance_secs
-    } else if score >= 0.4 {
+    } else if score >= config.medium_score_cutoff {
         config.medium_relevance_secs
     } else {
         config.low_relevance_secs
@@ -219,6 +220,8 @@ mod tests {
             high_relevance_secs: 300,
             medium_relevance_secs: 120,
             low_relevance_secs: 30,
+            high_score_cutoff: 0.8,
+            medium_score_cutoff: 0.4,
         };
 
         let now = Instant::now();

@@ -12,6 +12,8 @@ idle_10min = 0.3
 high_relevance_secs = 300
 medium_relevance_secs = 120
 low_relevance_secs = 30
+high_score_cutoff = 0.8
+medium_score_cutoff = 0.4
 
 [default_weights]
 urgency = 0.9
