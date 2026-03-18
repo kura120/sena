@@ -25,6 +25,7 @@ anyhow = "1"
 uuid = { version = "1", features = ["v4"] }
 toon-format = { version = "0.4", default-features = false }
 sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
 
 [build-dependencies]
 tonic-build = "0.12"
