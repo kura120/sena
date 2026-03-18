@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod model_loader;
 pub mod model_registry;
 
 /// In a full build, `tonic-build` overwrites `src/generated/sena.daemonbus.v1.rs`
