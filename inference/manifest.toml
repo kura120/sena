@@ -1,0 +1,4 @@
+name = "inference"
+language = "rust"
+responsibility = "Exclusive owner of llama-cpp-rs. Serves InferenceService gRPC for completions, manages VRAM budget and model lifecycle."
+capability_flags = ["inference", "model-loading", "streaming-completions"]

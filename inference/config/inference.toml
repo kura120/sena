@@ -1,0 +1,20 @@
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+listen_port = 50055
+connection_timeout_ms = 5000
+
+[model]
+model_id = "default"
+model_path = "models/default.gguf"
+gpu_layers = 35
+context_length = 4096
+vram_budget_mb = 4096
+
+[runtime]
+request_queue_max_depth = 64
+request_timeout_ms = 30000
+oom_retry_gpu_layer_divisor = 2
+
+[logging]
+level = "info"
+format = "json"
