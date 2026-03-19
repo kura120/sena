@@ -30,6 +30,8 @@ enum BootSignal {
   INFERENCE_DEGRADED = 14;     // OOM or partial failure; partial recovery in progress.
   // SoulBox signals.
   SOULBOX_READY = 15;          // Schema loaded and encryption verified.
+  // Prompt-composer signals.
+  PROMPT_COMPOSER_READY = 16;  // TOON encoder and context budget manager ready.
 }
 
 message BootSignalRequest {
@@ -113,6 +115,9 @@ enum EventTopic {
   // Agent registry events
   TOPIC_AGENT_REGISTERED = 66;  // A community agent passed review and was added to the registry.
   TOPIC_AGENT_QUARANTINED = 67; // A community agent failed review and was moved to quarantine.
+
+  // Prompt-composer events
+  TOPIC_PC_PROMPT_ASSEMBLED = 70; // Prompt assembly completed and ready for inference.
 }
 
 message BusEvent {
@@ -471,4 +476,58 @@ service InferenceService {
   rpc ReadActivations(ActivationRequest) returns (ActivationResponse);
   // Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
   rpc Steer(SteeringRequest) returns (SteeringAck);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PcService — Prompt Composer
+// ─────────────────────────────────────────────────────────────────────────────
+
+// PcService is prompt-composer's gRPC interface. CTP sends assembled
+// PromptContext; PC encodes it (TOON or JSON via ESU), enforces the sacred
+// content floor, trims to the model's context budget, and returns the final
+// prompt string ready for InferenceService.
+
+message PromptContextProto {
+  string soulbox_snapshot_json = 1;
+  repeated PcMemoryEntry short_term = 2;
+  repeated PcMemoryEntry long_term = 3;
+  repeated PcMemoryEntry episodic = 4;
+  string os_context_json = 5;
+  string model_id = 6;
+  uint32 context_window = 7;
+  uint32 output_reserve = 8;
+  string user_intent = 9;
+  string activity_state = 10;
+  repeated TelemetrySignal telemetry_signals = 11;
+}
+
+message PcMemoryEntry {
+  string node_id = 1;
+  string summary = 2;
+  float score = 3;
+  string tier = 4;
+}
+
+message TelemetrySignal {
+  string signal_type = 1;
+  string value = 2;
+  float relevance = 3;
+}
+
+message AssembleRequest {
+  PromptContextProto context = 1;
+  string request_id = 2;
+}
+
+message AssembleResponse {
+  string prompt = 1;
+  uint32 token_count = 2;
+  string model_id = 3;
+  string request_id = 4;
+  bool truncated = 5;
+  repeated string dropped_tiers = 6;
+}
+
+service PcService {
+  rpc Assemble(AssembleRequest) returns (AssembleResponse);
 }
