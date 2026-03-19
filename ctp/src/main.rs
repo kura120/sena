@@ -11,7 +11,7 @@
 //! 2. Initialize tracing subscriber
 //! 3. Connect to daemon-bus
 //! 4. Connect to memory-engine
-//! 5. Boot gate: wait for MEMORY_ENGINE_READY + MODEL_PROFILE_READY + (LORA_READY | LORA_SKIPPED)
+//! 5. Boot gate: wait for MEMORY_ENGINE_READY + MODEL_PROFILE_READY
 //! 6. Initialize ActivityMonitor, spawn poll loop
 //! 7. Initialize ThoughtQueue
 //! 8. Initialize ContextAssembler
@@ -269,10 +269,12 @@ async fn async_main() -> i32 {
 // Boot helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Wait for all three boot prerequisites:
+/// Wait for all boot prerequisites:
 /// - MEMORY_ENGINE_READY
 /// - MODEL_PROFILE_READY
-/// - LORA_READY or LORA_SKIPPED
+///
+/// Per PRD §3.2, CTP depends on MEMORY_ENGINE_READY and MODEL_PROFILE_READY
+/// only. LORA_MANAGER is optional and not required for CTP to start.
 async fn wait_for_boot_prerequisites(
     daemon_bus_address: &str,
     timeout: Duration,
@@ -295,15 +297,14 @@ async fn wait_for_boot_prerequisites(
     let wait_future = async {
         let mut memory_engine_ready = false;
         let mut model_profile_ready = false;
-        let mut lora_resolved = false;
 
         loop {
             match stream.message().await {
                 Ok(Some(bus_event)) => {
                     if bus_event.topic == i32::from(EventTopic::TopicBootSignal) {
-                        // TODO: decode BootSignal enum from payload once daemon-bus
-                        // wire format is finalized. Currently matching by source_subsystem
-                        // string as a Phase 1 approximation.
+                        // Match on source_subsystem to detect which signal arrived.
+                        // Boot signals are published by the boot orchestrator with
+                        // source_subsystem set to the signaling subsystem's ID.
                         match bus_event.source_subsystem.as_str() {
                             "memory_engine" | "memory-engine" => {
                                 memory_engine_ready = true;
@@ -323,19 +324,10 @@ async fn wait_for_boot_prerequisites(
                                     "received MODEL_PROFILE_READY"
                                 );
                             }
-                            "lora_manager" | "lora-manager" => {
-                                lora_resolved = true;
-                                tracing::info!(
-                                    subsystem = SUBSYSTEM_ID,
-                                    event_type = "boot_signal_received",
-                                    signal = "LORA_READY_OR_SKIPPED",
-                                    "received LORA_READY or LORA_SKIPPED"
-                                );
-                            }
                             _ => {}
                         }
 
-                        if memory_engine_ready && model_profile_ready && lora_resolved {
+                        if memory_engine_ready && model_profile_ready {
                             return Ok(());
                         }
                     }
@@ -440,20 +432,18 @@ mod tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
-    async fn test_boot_gate_requires_all_three_signals() {
-        // Verify that a multi-signal gate blocks until all three signals fire.
-        // This tests the boot gate pattern used in async_main.
+    async fn test_boot_gate_requires_two_signals() {
+        // Verify that a multi-signal gate blocks until both required signals fire.
+        // CTP depends on MEMORY_ENGINE_READY and MODEL_PROFILE_READY only.
         let (tx1, rx1) = oneshot::channel::<&str>();
         let (tx2, rx2) = oneshot::channel::<&str>();
-        let (tx3, rx3) = oneshot::channel::<&str>();
 
         let gate_task = tokio::spawn(async move {
-            // Simulates waiting for all three prerequisites
-            let (r1, r2, r3) = tokio::join!(rx1, rx2, rx3);
+            // Simulates waiting for the two prerequisites
+            let (r1, r2) = tokio::join!(rx1, rx2);
             (
                 r1.expect("test: signal 1 must arrive"),
                 r2.expect("test: signal 2 must arrive"),
-                r3.expect("test: signal 3 must arrive"),
             )
         });
 
@@ -467,16 +457,11 @@ mod tests {
 
         tx2.send("MODEL_PROFILE_READY")
             .expect("test: receiver should still be alive");
-        assert!(!gate_task.is_finished());
-
-        tx3.send("LORA_READY")
-            .expect("test: receiver should still be alive");
 
         // Now the gate should resolve
-        let (s1, s2, s3) = gate_task.await.expect("test: gate task should complete");
+        let (s1, s2) = gate_task.await.expect("test: gate task should complete");
         assert_eq!(s1, "MEMORY_ENGINE_READY");
         assert_eq!(s2, "MODEL_PROFILE_READY");
-        assert_eq!(s3, "LORA_READY");
     }
 
     #[tokio::test]

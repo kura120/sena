@@ -411,7 +411,38 @@ impl Supervisor {
                 .unwrap_or_else(|| subsystem_name.to_string())
         };
 
-        for attempt in 0..max_retries {
+        // Read the cumulative restart count that persisted from any previous
+        // crash–restart cycles. The `restart_count` field is never reset on
+        // spawn — it is only reset when the subsystem reaches the Ready state
+        // (i.e. its boot signal is received). This prevents an infinite loop
+        // of: crash → attempt_restart_with_policy(from=0) → spawn → crash → …
+        let prior_restart_count = {
+            let processes = self.inner.processes.read().await;
+            processes
+                .get(subsystem_name)
+                .map(|process| process.restart_count)
+                .unwrap_or(0)
+        };
+
+        // If we have already exhausted all retries in a previous call, go
+        // directly to degraded mode without attempting another restart.
+        if prior_restart_count >= max_retries {
+            tracing::warn!(
+                subsystem = %subsystem_id,
+                event_type = "restart_retries_already_exhausted",
+                restart_count = prior_restart_count,
+                max_retries = max_retries,
+                "restart count already at max — entering degraded mode immediately"
+            );
+            self.enter_degraded_mode(subsystem_name, &subsystem_id)
+                .await;
+            return;
+        }
+
+        // The remaining attempts are those not yet consumed from prior calls.
+        let remaining_start = prior_restart_count;
+
+        for attempt in remaining_start..max_retries {
             // Log last known state before each restart attempt (never restart blindly).
             {
                 let processes = self.inner.processes.read().await;

@@ -49,39 +49,31 @@ depends_on = ["DAEMON_BUS_READY"]
 
 [boot.subsystems.platform]
 signal = "PLATFORM_READY"
-timeout_ms = 5000
+timeout_ms = 60000
 required = false
 depends_on = ["DAEMON_BUS_READY"]
 
 [boot.subsystems.agents]
 signal = "AGENTS_READY"
-timeout_ms = 5000
+timeout_ms = 60000
 required = false
 depends_on = ["MEMORY_ENGINE_READY"]
 
 [boot.subsystems.model_probe]
 signal = "MODEL_PROFILE_READY"
-timeout_ms = 10000
+timeout_ms = 120000
 required = true
 depends_on = ["INFERENCE_READY"]
 
-[boot.subsystems.lora_manager]
-signal = "LORA_READY"
-# LORA_SKIPPED is also accepted as a valid completion signal.
-skip_signal = "LORA_SKIPPED"
-timeout_ms = 10000
-required = false
-depends_on = ["MODEL_PROFILE_READY"]
-
 [boot.subsystems.ctp]
 signal = "CTP_READY"
-timeout_ms = 5000
+timeout_ms = 60000
 required = true
 depends_on = ["MEMORY_ENGINE_READY", "MODEL_PROFILE_READY"]
 
 [boot.subsystems.ui]
 signal = "UI_READY"
-timeout_ms = 5000
+timeout_ms = 60000
 # UI is spawned on demand, not at boot. Not required for SENA_READY.
 required = false
 depends_on = ["CTP_READY"]
@@ -134,6 +126,18 @@ subsystem_id = "inference"
 command = "target/debug/inference.exe"
 args = []
 working_directory = "inference"
+
+[supervisor.subsystems.model_probe]
+subsystem_id = "model_probe"
+command = "target/debug/model-probe.exe"
+args = []
+working_directory = "model-probe"
+
+[supervisor.subsystems.ctp]
+subsystem_id = "ctp"
+command = "target/debug/ctp.exe"
+args = []
+working_directory = "ctp"
 
 [supervisor.subsystems.ui]
 subsystem_id = "ui"

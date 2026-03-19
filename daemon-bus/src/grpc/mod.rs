@@ -11,6 +11,7 @@
 //! operating so diagnostics can be collected.
 
 pub mod boot_service;
+pub mod event_bus_service;
 
 use std::net::SocketAddr;
 
@@ -18,11 +19,14 @@ use tonic::transport::Server;
 use tokio_stream::wrappers::TcpListenerStream;
 
 use crate::boot::BootOrchestrator;
+use crate::bus::EventBus;
 use crate::config::GrpcConfig;
 use crate::error::{ErrorCode, SenaError, SenaResult};
 use crate::generated::sena_daemonbus_v1::boot_service_server::BootServiceServer;
+use crate::generated::sena_daemonbus_v1::event_bus_service_server::EventBusServiceServer;
 
 use self::boot_service::BootServiceHandler;
+use self::event_bus_service::EventBusServiceHandler;
 
 /// Start the gRPC server and return only after the TCP socket is bound.
 ///
@@ -43,6 +47,7 @@ use self::boot_service::BootServiceHandler;
 pub async fn start_grpc_server(
     grpc_config: &GrpcConfig,
     boot_orchestrator: BootOrchestrator,
+    event_bus: EventBus,
 ) -> SenaResult<tokio::task::JoinHandle<()>> {
     // Parse the socket address from config.
     let addr_str = grpc_config.socket_addr();
@@ -86,6 +91,10 @@ pub async fn start_grpc_server(
     let boot_service_handler = BootServiceHandler::new(boot_orchestrator);
     let boot_service = BootServiceServer::new(boot_service_handler);
 
+    // Create the EventBusService handler and wrap it in the generated server.
+    let event_bus_service_handler = EventBusServiceHandler::new(event_bus);
+    let event_bus_service = EventBusServiceServer::new(event_bus_service_handler);
+
     // Wrap the already-bound listener in a stream that tonic can consume.
     // TcpListenerStream implements Stream<Item = Result<TcpStream, io::Error>>,
     // which satisfies serve_with_incoming's bound.
@@ -96,6 +105,7 @@ pub async fn start_grpc_server(
     let handle = tokio::spawn(async move {
         let server_result = Server::builder()
             .add_service(boot_service)
+            .add_service(event_bus_service)
             .serve_with_incoming(incoming)
             .await;
 

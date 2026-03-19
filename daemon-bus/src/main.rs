@@ -69,9 +69,13 @@ async fn async_main() {
     // The config path is resolved relative to the daemon-bus crate root.
     // An override via the DAEMON_BUS_CONFIG environment variable is supported
     // for development and CI, but the default is always the checked-in file.
+    // Default config path is relative to the workspace root so daemon-bus can
+    // be launched from `C:\dev\Sena` without setting DAEMON_BUS_CONFIG.
+    // When running from the individual crate directory (e.g. during development),
+    // set the env var: DAEMON_BUS_CONFIG=config/daemon-bus.toml
     let config_path = std::env::var("DAEMON_BUS_CONFIG")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("config/daemon-bus.toml"));
+        .unwrap_or_else(|_| PathBuf::from("daemon-bus/config/daemon-bus.toml"));
 
     let config = match DaemonBusConfig::load(&config_path).await {
         Ok(loaded_config) => loaded_config,
@@ -142,6 +146,7 @@ async fn async_main() {
     let _grpc_server_handle = match grpc::start_grpc_server(
         &config.grpc,
         boot_orchestrator.clone(),
+        event_bus.clone(),
     )
     .await
     {
