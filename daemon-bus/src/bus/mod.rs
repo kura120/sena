@@ -45,6 +45,13 @@ pub fn topic_name(topic: EventTopic) -> &'static str {
         EventTopic::TopicLoraTrainingRecommended => "lora.training_recommended",
         EventTopic::TopicUserMessageReceived => "user.message.received",
         EventTopic::TopicUserMessageResponse => "user.message.response",
+        EventTopic::TopicThoughtSurfaced => "thought.surfaced",
+        EventTopic::TopicSessionCompactionTriggered => "session.compaction_triggered",
+        EventTopic::TopicMemoryConsolidationRequested => "memory.consolidation_requested",
+        EventTopic::TopicInferenceModelSwitching => "inference.model_switching",
+        EventTopic::TopicAgentRegistered => "agent.registered",
+        EventTopic::TopicAgentQuarantined => "agent.quarantined",
+        EventTopic::TopicPcPromptAssembled => "pc.prompt_assembled",
     }
 }
 

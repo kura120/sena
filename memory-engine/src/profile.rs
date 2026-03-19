@@ -97,6 +97,37 @@ pub struct ProfileDerivedConfig {
     pub memory_injection_fidelity: f32,
 }
 
+impl ProfileDerivedConfig {
+    /// Construct a safe, conservative default for use before the
+    /// `ModelCapabilityProfile` arrives from model-probe.
+    ///
+    /// memory-engine boots with this config so it can signal
+    /// `MEMORY_ENGINE_READY` without blocking on model-probe, which does not
+    /// start until after the inference subsystem is running — and inference
+    /// does not start until memory-engine is ready.  The real profile is
+    /// applied when the background `MODEL_PROFILE_READY` subscriber fires.
+    ///
+    /// Conservative choices:
+    /// - `dynamic_linking_enabled = false` — avoids garbage edges when the
+    ///   model's graph-extraction capability is unknown.
+    /// - `contradiction_sensitivity = 0.3` — minimum floor value; prevents
+    ///   false positives from a model with unknown reasoning quality.
+    /// - `degraded_extractor = true` — always safe; also forced by the Phase 1
+    ///   override in `derive_config` regardless of the profile.
+    /// - `context_budget = 0` — no budget constraint; prompt-composer clamps
+    ///   to its own defaults when the budget is absent.
+    pub fn without_profile() -> Self {
+        Self {
+            context_budget: 0,
+            dynamic_linking_enabled: false,
+            contradiction_sensitivity: 0.3,
+            degraded_extractor: true,
+            model_id: "unknown".to_owned(),
+            memory_injection_fidelity: 0.5,
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Derivation logic
 // ─────────────────────────────────────────────────────────────────────────────

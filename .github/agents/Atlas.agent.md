@@ -115,7 +115,7 @@ For each phase in the plan, execute this cycle:
 
 3. **Generate Git Commit Message**: Provide a commit message following <git_commit_style_guide> in a plain text code block for easy copying.
 
-4. **MANDATORY STOP**: Wait for user to:
+4. **MANDATORY STOP** (unless user pre-approved): Wait for user to confirm before proceeding.:
    - Make the git commit
    - Confirm readiness to proceed to next phase
    - Request changes or abort
@@ -293,7 +293,7 @@ CRITICAL PAUSE POINTS - You must stop and wait for user input at:
 2. After each phase is reviewed and commit message is provided (before proceeding to next phase)
 3. After plan completion document is created
 
-DO NOT proceed past these points without explicit user confirmation.
+Unless the user has explicitly pre-approved all phases beforehand, in which case skip all pause points and run to completion automatically.
 </stopping_rules>
 
 <state_tracking>

@@ -23,6 +23,7 @@ pub mod boot;
 pub mod bus;
 pub mod config;
 pub mod error;
+pub mod grpc;
 pub mod supervisor;
 pub mod watchdog;
 
@@ -129,10 +130,38 @@ async fn async_main() {
     // ── Step 6: Create the priority arbiter ──────────────────────────────
     let _arbiter = Arbiter::new(config.arbitration.clone(), event_bus.clone());
 
-    // ── Step 7: Run the boot sequence ────────────────────────────────────
+    // ── Step 7: Create boot orchestrator and start gRPC server ──────────
+    //
+    // The boot orchestrator is created first so the gRPC BootService can
+    // hold a handle to it. The gRPC server is started *before* the boot
+    // sequence runs so that child subsystems can call SignalReady over gRPC
+    // as soon as they are spawned.
     let boot_orchestrator =
         BootOrchestrator::new(&config.boot, event_bus.clone(), supervisor.clone());
 
+    let _grpc_server_handle = match grpc::start_grpc_server(
+        &config.grpc,
+        boot_orchestrator.clone(),
+    )
+    .await
+    {
+        Ok(handle) => handle,
+        Err(grpc_error) => {
+            tracing::error!(
+                subsystem = "daemon_bus",
+                event_type = "grpc_server_start_failed",
+                error_code = %grpc_error.code,
+                error_message = %grpc_error.message,
+                "failed to start gRPC server — child subsystems will not be able to signal readiness"
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // ── Step 8: Run the boot sequence ────────────────────────────────────
+    //
+    // The gRPC server is now accepting connections. The boot orchestrator
+    // spawns child subsystems which connect back to gRPC to signal readiness.
     let mut boot_phase_receiver = match boot_orchestrator.run().await {
         Ok(receiver) => receiver,
         Err(boot_error) => {
@@ -148,17 +177,8 @@ async fn async_main() {
     };
 
     // Wait for boot to reach a terminal state (Ready or Failed).
-    // This blocks the main task until the boot sequence completes — the gRPC
-    // server is not started until boot is resolved. Subsystems that need to
-    // signal readiness do so via the already-running boot orchestrator which
-    // accepts signals through its public API (and, once the gRPC server is
-    // up, via the BootService RPC).
-    //
-    // In practice, the gRPC server should be started *before* waiting for
-    // boot completion so that child subsystems can call SignalReady over gRPC.
-    // The current scaffold resolves this by having the boot orchestrator
-    // accept signals via direct method calls during the boot phase, with the
-    // gRPC layer added in a follow-up implementation PR.
+    // The gRPC server is already running so child subsystems can call
+    // SignalReady while this loop waits.
     loop {
         // wait for changes; the initial value is InProgress
         if boot_phase_receiver.changed().await.is_err() {
@@ -201,50 +221,10 @@ async fn async_main() {
         }
     }
 
-    // ── Step 8: Serve gRPC ───────────────────────────────────────────────
+    // ── Step 9: Keep daemon-bus alive ────────────────────────────────────
     //
-    // The gRPC server binds on the configured address and serves all five
-    // services: Boot, EventBus, Arbitration, Supervisor, Watchdog.
-    //
-    // Actual tonic service registration is a TODO — this scaffold sets up
-    // the bind address and logs intent. Full implementation requires the
-    // real tonic-generated server types from a successful `cargo build`
-    // against the proto file.
-
-    let grpc_address = config.grpc.socket_addr();
-
-    tracing::info!(
-        subsystem = "daemon_bus",
-        event_type = "grpc_server_starting",
-        address = %grpc_address,
-        "starting gRPC server"
-    );
-
-    // TODO(implementation): Register tonic services and serve.
-    //
-    // The full implementation will look like:
-    //
-    //   tonic::transport::Server::builder()
-    //       .add_service(boot_service)
-    //       .add_service(event_bus_service)
-    //       .add_service(arbitration_service)
-    //       .add_service(supervisor_service)
-    //       .add_service(watchdog_service)
-    //       .serve(grpc_address.parse().unwrap())
-    //       .await
-    //       .unwrap();
-    //
-    // For now, keep the process alive so supervised children have a parent.
-
-    tracing::info!(
-        subsystem = "daemon_bus",
-        event_type = "grpc_server_stub",
-        address = %grpc_address,
-        "gRPC server stub — awaiting implementation. daemon-bus is running."
-    );
-
-    // Hold the process open. In production this would be the gRPC server's
-    // serve future. For the scaffold, use a shutdown signal listener.
+    // The gRPC server is running in a background task. Hold the main task
+    // open until a shutdown signal is received.
     match tokio::signal::ctrl_c().await {
         Ok(()) => {
             tracing::info!(

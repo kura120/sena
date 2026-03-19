@@ -8,14 +8,19 @@
 //!
 //! 1. Load config from `memory-engine.toml`
 //! 2. Initialize tracing subscriber
-//! 3. Receive `ModelCapabilityProfile` from daemon-bus (subscribe to event bus)
-//! 4. Derive `ProfileDerivedConfig` via `profile.rs`
-//! 5. Construct `LlamaEmbedder` and `LlamaExtractor` (or `DegradedExtractor`)
-//! 6. Initialize ech0 `Store`
-//! 7. Initialize `MemoryEngine`
-//! 8. Start gRPC server (`MemoryService`)
-//! 9. Signal `MEMORY_ENGINE_READY` to daemon-bus
-//! 10. Await shutdown signal from daemon-bus
+//! 3. Construct `LlamaEmbedder` and `DegradedExtractor`
+//! 4. Initialize ech0 `Store` with `ProfileDerivedConfig::without_profile()`
+//!    (conservative defaults — does not block on model-probe)
+//! 5. Initialize `MemoryEngine`
+//! 6. Start gRPC server (`MemoryService`)
+//! 7. Signal `MEMORY_ENGINE_READY` to daemon-bus
+//! 8. Subscribe to `MODEL_PROFILE_READY` event in background — store
+//!    reconfiguration from the real profile is deferred to Phase 2
+//! 9. Await shutdown signal from daemon-bus
+//!
+//! Steps 3–7 must not block on model-probe or inference. Per PRD §3.2,
+//! memory-engine depends only on `DAEMON_BUS_READY` and must signal its own
+//! readiness before model-probe can start.
 //!
 //! No `println!` or `eprintln!` except for the single pre-tracing fatal path
 //! where the config file cannot be loaded and tracing is not yet initialized.
@@ -120,41 +125,22 @@ async fn async_main() -> i32 {
 
     let config = Arc::new(config);
 
-    // ── Step 3: Receive ModelCapabilityProfile from daemon-bus ───────────
-    let model_profile = match receive_model_profile(&config).await {
-        Ok(profile) => profile,
-        Err(profile_error) => {
-            tracing::error!(
-                subsystem = SUBSYSTEM_ID,
-                error_code = %profile_error.code,
-                "failed to receive ModelCapabilityProfile from daemon-bus"
-            );
-            best_effort_signal_failure(&config).await;
-            return 1;
-        }
-    };
+    // ── Step 3: Derive boot-time ProfileDerivedConfig ────────────────────
+    //
+    // PRD §3.2: memory-engine depends only on DAEMON_BUS_READY. It must not
+    // block on ModelCapabilityProfile — that is published by model-probe,
+    // which starts after inference, which starts after memory-engine is
+    // already ready. Use conservative defaults for boot; the real profile
+    // arrives via a background subscriber after we signal readiness.
+    let profile_derived = profile::ProfileDerivedConfig::without_profile();
 
     tracing::info!(
         subsystem = SUBSYSTEM_ID,
-        model_id = %model_profile.model_id,
-        "ModelCapabilityProfile received"
+        component = "profile",
+        "booting with default ProfileDerivedConfig — ModelCapabilityProfile will arrive after MEMORY_ENGINE_READY"
     );
 
-    // ── Step 4: Derive ProfileDerivedConfig ──────────────────────────────
-    let profile_derived = match profile::derive_config(&model_profile, &config) {
-        Ok(derived) => derived,
-        Err(derive_error) => {
-            tracing::error!(
-                subsystem = SUBSYSTEM_ID,
-                error_code = %derive_error.code,
-                "failed to derive config from ModelCapabilityProfile"
-            );
-            best_effort_signal_failure(&config).await;
-            return 1;
-        }
-    };
-
-    // ── Step 5: Construct Embedder and Extractor ────────────────────────
+    // ── Step 3: Construct Embedder and Extractor ────────────────────────
     //
     // LlamaBackend must be initialized once and shared. Model loading is
     // blocking I/O — run in spawn_blocking to avoid stalling the async runtime.
@@ -281,7 +267,7 @@ async fn async_main() -> i32 {
     }
 }
 
-/// Continue the boot sequence from step 6 onward with concrete Embedder and
+/// Continue the boot sequence from step 4 onward with concrete Embedder and
 /// Extractor types. This avoids dynamic dispatch (`Box<dyn>`) which ech0's
 /// Store does not support.
 async fn run_with_store<E, X>(
@@ -295,7 +281,7 @@ where
     E: ech0::Embedder + 'static,
     X: ech0::Extractor + 'static,
 {
-    // ── Step 6: Initialize ech0 Store ───────────────────────────────────
+    // ── Step 4: Initialize ech0 Store ───────────────────────────────────
     let store_config = build_store_config(&profile_derived, &config, vector_dimensions);
 
     let store = match ech0::Store::new(store_config, embedder, extractor).await {
@@ -319,7 +305,7 @@ where
         }
     };
 
-    // ── Step 7: Initialize MemoryEngine ─────────────────────────────────
+    // ── Step 5: Initialize MemoryEngine ─────────────────────────────────
     let write_queue = Arc::new(WriteQueue::new(Arc::clone(&store), config.queue.clone()));
 
     let bus_client = match connect_to_daemon_bus(&config).await {
@@ -351,7 +337,7 @@ where
 
     tracing::info!(subsystem = SUBSYSTEM_ID, "MemoryEngine initialized");
 
-    // ── Step 8: Start gRPC server ────────────────────────────────────────────
+    // ── Step 6: Start gRPC server ────────────────────────────────────────────
     use crate::generated::sena_daemonbus_v1::memory_service_server::MemoryServiceServer;
 
     let memory_service = grpc::MemoryServiceImpl::new(Arc::clone(&engine));
@@ -403,7 +389,7 @@ where
         "gRPC server started"
     );
 
-    // ── Step 9: Signal MEMORY_ENGINE_READY to daemon-bus ────────────────
+    // ── Step 7: Signal MEMORY_ENGINE_READY to daemon-bus ─────────────────
     if let Err(signal_error) = signal_ready(&config).await {
         tracing::error!(
             subsystem = SUBSYSTEM_ID,
@@ -419,7 +405,41 @@ where
         );
     }
 
-    // ── Step 10: Await shutdown signal ──────────────────────────────────
+    // ── Step 8: Subscribe to MODEL_PROFILE_READY in background ───────────
+    //
+    // Now that we are ready, subscribe to the event that model-probe will
+    // publish once inference is also up. When it arrives we log the profile
+    // fields. Full store reconfiguration (context budget, dynamic linking,
+    // contradiction sensitivity) is deferred to Phase 2.
+    let config_for_profile = Arc::clone(&config);
+    tokio::spawn(async move {
+        match receive_model_profile(&config_for_profile).await {
+            Ok(model_profile) => {
+                tracing::info!(
+                    subsystem = SUBSYSTEM_ID,
+                    component = "profile",
+                    event_type = "model_profile_received",
+                    model_id = %model_profile.model_id,
+                    context_window = model_profile.context_window,
+                    pre_rot_threshold = model_profile.pre_rot_threshold,
+                    lora_compatible = model_profile.lora_compatible,
+                    "ModelCapabilityProfile received — store reconfiguration deferred to Phase 2"
+                );
+            }
+            Err(profile_error) => {
+                // Not fatal — memory-engine is already running with defaults.
+                // Log as warn so operators know the profile never arrived.
+                tracing::warn!(
+                    subsystem = SUBSYSTEM_ID,
+                    component = "profile",
+                    error_code = %profile_error.code,
+                    "ModelCapabilityProfile did not arrive — store continues with default profile"
+                );
+            }
+        }
+    });
+
+    // ── Step 9: Await shutdown signal ──────────────────────────────────
     tracing::info!(
         subsystem = SUBSYSTEM_ID,
         "memory-engine running — awaiting shutdown signal"

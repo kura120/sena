@@ -33,37 +33,37 @@ channel_capacity = 256
 [boot]
 # Overall boot sequence timeout in milliseconds.
 # If SENA_READY is not reached within this window, boot is considered failed.
-total_timeout_ms = 30000
+total_timeout_ms = 300000
 
 [boot.subsystems.memory_engine]
 signal = "MEMORY_ENGINE_READY"
-timeout_ms = 5000
+timeout_ms = 300000
+required = true
+depends_on = ["DAEMON_BUS_READY"]
+
+[boot.subsystems.inference]
+signal = "INFERENCE_READY"
+timeout_ms = 300000
 required = true
 depends_on = ["DAEMON_BUS_READY"]
 
 [boot.subsystems.platform]
 signal = "PLATFORM_READY"
 timeout_ms = 5000
-required = true
+required = false
 depends_on = ["DAEMON_BUS_READY"]
 
 [boot.subsystems.agents]
 signal = "AGENTS_READY"
 timeout_ms = 5000
-required = true
+required = false
 depends_on = ["MEMORY_ENGINE_READY"]
-
-[boot.subsystems.ollama]
-signal = "OLLAMA_READY"
-timeout_ms = 15000
-required = true
-depends_on = ["AGENTS_READY"]
 
 [boot.subsystems.model_probe]
 signal = "MODEL_PROFILE_READY"
 timeout_ms = 10000
 required = true
-depends_on = ["OLLAMA_READY"]
+depends_on = ["INFERENCE_READY"]
 
 [boot.subsystems.lora_manager]
 signal = "LORA_READY"
@@ -85,6 +85,9 @@ timeout_ms = 5000
 # UI is spawned on demand, not at boot. Not required for SENA_READY.
 required = false
 depends_on = ["CTP_READY"]
+
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Process Supervision
@@ -108,30 +111,35 @@ process_start_grace_ms = 2000
 # Definitions of each supervised subsystem and how to spawn it.
 # command and args are OS-specific — these are Windows defaults.
 
+# [supervisor.subsystems.agents]
+# subsystem_id = "agents"
+# command = "uv"
+# args = ["run", "python", "-m", "sena_agents"]
+# working_directory = "../agents"
+
+# [supervisor.subsystems.platform]
+# subsystem_id = "platform"
+# command = "dotnet"
+# args = ["run", "--project", "../platform/windows"]
+# working_directory = "../platform/windows"
+
 [supervisor.subsystems.memory_engine]
 subsystem_id = "memory_engine"
-command = "memory-engine"
+command = "target/debug/memory-engine.exe"
 args = []
-working_directory = "../memory-engine"
+working_directory = "memory-engine"
 
-[supervisor.subsystems.agents]
-subsystem_id = "agents"
-command = "uv"
-args = ["run", "python", "-m", "sena_agents"]
-working_directory = "../agents"
-
-[supervisor.subsystems.platform]
-subsystem_id = "platform"
-command = "dotnet"
-args = ["run", "--project", "../platform/windows"]
-working_directory = "../platform/windows"
+[supervisor.subsystems.inference]
+subsystem_id = "inference"
+command = "target/debug/inference.exe"
+args = []
+working_directory = "inference"
 
 [supervisor.subsystems.ui]
 subsystem_id = "ui"
-command = "sena-ui"
+command = "target/debug/ui.exe"
 args = []
-working_directory = "../ui"
-# UI is spawned on demand, not at boot.
+working_directory = "ui"
 spawn_at_boot = false
 
 # ─────────────────────────────────────────────────────────────────────────────

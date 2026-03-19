@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "daemon-bus",
+    "inference",
+    "memory-engine",
+    "model-probe",
+    "ctp",
+    "prompt-composer",
+    "ui",
+]
+resolver = "2"
+
+[patch.crates-io]
+usearch = { path = "third_party/usearch-2.24.0" }
