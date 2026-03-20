@@ -101,15 +101,6 @@ struct EventBusInner {
     /// Not used for routing — all subscribers receive all messages and filter locally.
     subscriber_counts: RwLock<HashMap<EventTopic, usize>>,
     channel_capacity: usize,
-    /// Ordered list of every boot-signal event that has been published so far.
-    ///
-    /// Uses a `std::sync::Mutex` (not tokio) because `publish()` is non-async
-    /// and the lock is never held across an await point. When a new gRPC
-    /// subscriber connects and requests `TopicBootSignal`, all events in this
-    /// list are immediately sent before the live stream begins — this ensures
-    /// subsystems that connect after `DAEMON_BUS_READY` is emitted still
-    /// receive it at subscription time.
-    boot_signal_replay: std::sync::Mutex<Vec<InternalBusEvent>>,
 }
 
 impl EventBus {
@@ -126,7 +117,6 @@ impl EventBus {
                 sender,
                 subscriber_counts: RwLock::new(HashMap::new()),
                 channel_capacity,
-                boot_signal_replay: std::sync::Mutex::new(Vec::new()),
             }),
         }
     }
@@ -140,21 +130,6 @@ impl EventBus {
     pub fn publish(&self, event: InternalBusEvent) -> SenaResult<usize> {
         let topic = event.topic;
         let topic_str = topic_name(topic);
-
-        // Store boot signal events in the replay cache before broadcasting.
-        // New gRPC subscribers that arrive after these signals fire will
-        // receive them immediately on connect — preventing the race where
-        // DAEMON_BUS_READY is emitted before a subsystem subscribes.
-        // The std::sync::Mutex is intentional: publish() is non-async and the
-        // lock is never held across an await point, so a tokio mutex is not
-        // needed and would be incorrect here.
-        if topic == EventTopic::TopicBootSignal {
-            if let Ok(mut replay) = self.inner.boot_signal_replay.lock() {
-                replay.push(event.clone());
-            }
-            // If the mutex is poisoned (from a panic elsewhere) we skip
-            // storage but always proceed with the broadcast.
-        }
 
         match self.inner.sender.send(event) {
             Ok(receiver_count) => {
@@ -226,20 +201,6 @@ impl EventBus {
     /// Returns the current number of active receivers on the broadcast channel.
     pub fn receiver_count(&self) -> usize {
         self.inner.sender.receiver_count()
-    }
-
-    /// Returns a snapshot of all boot signal events published so far.
-    ///
-    /// Used by the gRPC `EventBusService.Subscribe` handler to replay missed
-    /// boot signals to newly-connected subscribers. The snapshot is a clone
-    /// so the lock is released immediately. Returns an empty Vec if the
-    /// replay mutex is poisoned.
-    pub fn boot_signal_snapshot(&self) -> Vec<InternalBusEvent> {
-        self.inner
-            .boot_signal_replay
-            .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
     }
 }
 

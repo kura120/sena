@@ -115,13 +115,3 @@ format = "pretty"
 # Threshold in milliseconds above which any memory operation is logged at
 # warn level regardless of its configured priority.
 slow_operation_threshold_ms = 100
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ech0 storage paths
-# ─────────────────────────────────────────────────────────────────────────────
-
-[store]
-# Path to the redb graph database file, relative to the memory-engine working directory.
-graph_path = "data/graph.redb"
-# Path to the usearch vector index file, relative to the memory-engine working directory.
-vector_path = "data/vectors.usearch"

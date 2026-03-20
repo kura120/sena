@@ -295,40 +295,11 @@ where
         }
         Err(echo_error) => {
             let sena_error: SenaError = echo_error.into();
-
-            // Surface a specific, actionable message when the redb file lock
-            // is held by a previous memory-engine process that was not fully
-            // shut down. The generic "failed to initialize ech0 Store" message
-            // does not tell the operator what to do.
-            let debug_str = sena_error
-                .debug_context
-                .as_ref()
-                .map(|ctx| ctx.detail.as_str())
-                .unwrap_or("");
-            let is_lock_conflict = debug_str.contains("already open")
-                || debug_str.contains("Cannot acquire lock")
-                || sena_error.message.contains("already open")
-                || sena_error.message.contains("Cannot acquire lock");
-
-            if is_lock_conflict {
-                tracing::error!(
-                    subsystem = SUBSYSTEM_ID,
-                    component = "store",
-                    error_code = %sena_error.code,
-                    db_path = %config.store.graph_path,
-                    "FATAL: redb database lock held by another process \
-                     — ensure no other memory-engine instance is running"
-                );
-            } else {
-                tracing::error!(
-                    subsystem = SUBSYSTEM_ID,
-                    error_code = %sena_error.code,
-                    error_message = %sena_error.message,
-                    debug_context = ?sena_error.debug_context,
-                    "failed to initialize ech0 Store"
-                );
-            }
-
+            tracing::error!(
+                subsystem = SUBSYSTEM_ID,
+                error_code = %sena_error.code,
+                "failed to initialize ech0 Store"
+            );
             best_effort_signal_failure(&config).await;
             return 1;
         }
@@ -732,7 +703,7 @@ async fn best_effort_signal_failure(config: &Config) {
 /// will be updated as ech0 stabilizes.
 fn build_store_config(
     profile_derived: &profile::ProfileDerivedConfig,
-    config: &Config,
+    _config: &Config,
     vector_dimensions: usize,
 ) -> ech0::StoreConfig {
     // Construct ech0 config types from our derived values.
@@ -746,11 +717,6 @@ fn build_store_config(
     // We use ech0 defaults for most fields and override the ones controlled
     // by the profile derivation.
     let mut store_config = ech0::StoreConfig::default();
-
-    // Set storage paths from config — ech0 will create the files if they do
-    // not yet exist, but the parent directory must exist before Store::new.
-    store_config.store.graph_path = config.store.graph_path.clone();
-    store_config.store.vector_path = config.store.vector_path.clone();
 
     // Set vector dimensions to match the embedder.
     store_config.store.vector_dimensions = vector_dimensions;

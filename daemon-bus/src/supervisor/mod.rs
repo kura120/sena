@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::process::Command;
-use tokio::sync::{Mutex as TokioMutex, RwLock};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
 use crate::bus::{EventBus, InternalBusEvent};
@@ -53,14 +53,6 @@ struct SupervisedProcess {
     /// Handle to the background task that watches the child process for exit.
     /// Stored so it is never silently dropped — dropped handles cancel the task.
     watcher_handle: Option<JoinHandle<()>>,
-    /// Shared child process handle for cooperative shutdown.
-    ///
-    /// The watcher task takes the child from this slot when it starts waiting.
-    /// `shutdown_all()` also locks this slot to claim the child for
-    /// kill + wait. Whichever claims it first owns the wait. If the watcher
-    /// already claimed it, `shutdown_all()` falls back to awaiting the
-    /// aborted watcher JoinHandle (which drops the child, firing kill_on_drop).
-    child: Arc<TokioMutex<Option<tokio::process::Child>>>,
 }
 
 impl SupervisedProcess {
@@ -72,7 +64,6 @@ impl SupervisedProcess {
             pid: None,
             last_error: None,
             watcher_handle: None,
-            child: Arc::new(TokioMutex::new(None)),
         }
     }
 }
@@ -176,7 +167,7 @@ impl Supervisor {
     /// break the recursive async type without cluttering the logic.
     async fn spawn_subsystem_inner(&self, subsystem_name: &str) -> SenaResult<u32> {
         // ── Phase 1: extract spawn info under lock, mark Starting ───────
-        let (command, args, working_directory, subsystem_id, child_slot) = {
+        let (command, args, working_directory, subsystem_id) = {
             let mut processes = self.inner.processes.write().await;
             let process_entry = processes.get_mut(subsystem_name).ok_or_else(|| {
                 SenaError::new(
@@ -192,9 +183,6 @@ impl Supervisor {
                 process_entry.config.args.clone(),
                 process_entry.config.working_directory.clone(),
                 process_entry.config.subsystem_id.clone(),
-                // Clone the Arc so the watcher and shutdown_all() can both
-                // access the child handle without holding the processes lock.
-                Arc::clone(&process_entry.child),
             )
         };
         // Write lock released here — no guard held during OS spawn.
@@ -205,10 +193,7 @@ impl Supervisor {
             .current_dir(&working_directory)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            // kill_on_drop(true): when the Child is dropped (e.g. because the
-            // watcher task is aborted during shutdown), tokio sends
-            // TerminateProcess on Windows so the child cannot outlive daemon-bus.
-            .kill_on_drop(true)
+            .kill_on_drop(false)
             .spawn();
 
         match child_result {
@@ -225,16 +210,6 @@ impl Supervisor {
                     }
                 }
                 // Write lock released here.
-
-                // ── Phase 3.5: store child in shared slot ───────────────
-                //
-                // Placed after releasing the processes write lock so we never
-                // hold two locks simultaneously. The watcher and shutdown_all()
-                // both access the child through this Arc<Mutex<Option<Child>>>.
-                {
-                    let mut child_guard = child_slot.lock().await;
-                    *child_guard = Some(child);
-                }
 
                 tracing::info!(
                     subsystem = %subsystem_id,
@@ -253,9 +228,8 @@ impl Supervisor {
                 // ── Phase 4: spawn watcher (no lock held) ───────────────
                 let supervisor_clone = self.clone();
                 let subsystem_name_owned = subsystem_name.to_string();
-                let child_slot_for_watcher = Arc::clone(&child_slot);
                 let watcher_handle = tokio::spawn(async move {
-                    Self::watch_process(supervisor_clone, subsystem_name_owned, child_slot_for_watcher).await;
+                    Self::watch_process(supervisor_clone, subsystem_name_owned, child).await;
                 });
 
                 // ── Phase 5: store handle under lock ────────────────────
@@ -307,37 +281,11 @@ impl Supervisor {
     ///
     /// This function is spawned as a tokio task — its JoinHandle is stored
     /// in `SupervisedProcess.watcher_handle` so it is never silently dropped.
-    ///
-    /// The child is passed via a shared `Arc<Mutex<Option<Child>>>` rather than
-    /// by value so that `shutdown_all()` can also claim the child for a
-    /// kill + wait (with timeout) when daemon-bus is shutting down. Whichever
-    /// side locks and takes the child first owns the wait; the other side
-    /// detects `None` and falls back to its own cleanup path.
     async fn watch_process(
         supervisor: Supervisor,
         subsystem_name: String,
-        child_slot: Arc<TokioMutex<Option<tokio::process::Child>>>,
+        mut child: tokio::process::Child,
     ) {
-        // Take the child from the shared slot. If shutdown_all() already
-        // claimed it (rare race on immediate shutdown), exit silently —
-        // shutdown_all() is handling the kill + wait for this child.
-        let mut child = {
-            let mut guard = child_slot.lock().await;
-            match guard.take() {
-                Some(c) => c,
-                None => {
-                    tracing::debug!(
-                        subsystem = "daemon_bus",
-                        event_type = "watch_process_child_gone",
-                        subsystem_name = %subsystem_name,
-                        "child slot empty at watcher start — shutdown claimed child"
-                    );
-                    return;
-                }
-            }
-        };
-        // Mutex guard released here — child is now locally owned.
-
         // Wait for the process to exit. This is non-blocking — tokio's
         // process driver uses OS-specific async wait mechanisms.
         let exit_status = child.wait().await;
@@ -747,19 +695,9 @@ impl Supervisor {
 
     /// Gracefully shut down all supervised subsystems.
     ///
-    /// For each running subsystem:
-    /// 1. Aborts the watcher task (prevents crash-triggered restarts during shutdown).
-    /// 2. Claims the child process handle from the shared slot.
-    /// 3. Sends a kill signal via `Child::kill()`.
-    /// 4. Awaits `Child::wait()` with a 2000 ms timeout so file locks (e.g.
-    ///    the redb database lock) are confirmed released before this method
-    ///    returns and a new instance can start.
-    ///
-    /// If the watcher already claimed the child (it was in `child.wait()` when
-    /// abort fired), the child is dropped by the task cancellation which fires
-    /// `kill_on_drop` (TerminateProcess on Windows). In that case we await the
-    /// aborted JoinHandle instead — the handle resolves only after the task
-    /// future has been fully dropped, confirming the kill has been issued.
+    /// Aborts all watcher tasks and updates state. In a full implementation,
+    /// this would send a graceful shutdown signal to each child process via
+    /// gRPC before hard-killing after a timeout.
     pub async fn shutdown_all(&self) {
         tracing::info!(
             subsystem = "daemon_bus",
@@ -767,157 +705,20 @@ impl Supervisor {
             "shutting down all supervised subsystems"
         );
 
-        // ── Phase 1: collect handles + child slots, mark all stopped ─────
-        //
-        // Gather everything we need before releasing the lock.
-        // Handles are NOT aborted yet — we abort in Phase 2 so we can still
-        // collect them here without consuming.
-        let shutdown_targets: Vec<(
-            String,
-            Option<JoinHandle<()>>,
-            Arc<TokioMutex<Option<tokio::process::Child>>>,
-        )>;
-        {
-            let mut processes = self.inner.processes.write().await;
-            shutdown_targets = processes
-                .iter_mut()
-                .map(|(subsystem_name, process_entry)| {
-                    let handle = process_entry.watcher_handle.take();
-                    let pid = process_entry.pid.take();
-                    process_entry.state = SubsystemState::Stopped;
-
-                    tracing::info!(
-                        subsystem = %process_entry.config.subsystem_id,
-                        event_type = "subsystem_stopped",
-                        subsystem_name = %subsystem_name,
-                        pid = pid.unwrap_or(0),
-                        "subsystem stopped during supervisor shutdown"
-                    );
-
-                    (
-                        process_entry.config.subsystem_id.clone(),
-                        handle,
-                        Arc::clone(&process_entry.child),
-                    )
-                })
-                .collect();
-        }
-        // Write lock released here.
-
-        // ── Phase 2: abort all watcher tasks ─────────────────────────────
-        //
-        // `JoinHandle::abort` takes `&self` so handles are not consumed here.
-        // The abort signal is sent but task cancellation is asynchronous —
-        // we confirm completion in Phase 3.
-        for (_, handle_opt, _) in &shutdown_targets {
-            if let Some(handle) = handle_opt {
+        let mut processes = self.inner.processes.write().await;
+        for (subsystem_name, process_entry) in processes.iter_mut() {
+            if let Some(handle) = process_entry.watcher_handle.take() {
                 handle.abort();
             }
-        }
+            process_entry.state = SubsystemState::Stopped;
+            process_entry.pid = None;
 
-        // ── Phase 3: kill + wait for each child ──────────────────────────
-        //
-        // Two paths depending on who owns the child handle:
-        //
-        // A) We claim the child from the shared slot (watcher hadn't started
-        //    or hadn't taken it yet): call kill() + wait(timeout) directly.
-        //    This is the common path for a daemon-bus restart scenario.
-        //
-        // B) The watcher already claimed the child (it was suspended in
-        //    child.wait()): the slot is empty. The abort fired above will
-        //    cancel the watcher at its next await point, dropping the Child
-        //    which fires kill_on_drop (TerminateProcess on Windows). We await
-        //    the aborted JoinHandle with the same timeout to confirm the task
-        //    has been fully cancelled and the kill has been issued.
-        for (subsystem_id, handle_opt, child_slot) in shutdown_targets {
-            let child_opt = {
-                let mut guard = child_slot.lock().await;
-                guard.take()
-            };
-
-            if let Some(mut child) = child_opt {
-                // Path A: we own the child — kill and wait with timeout.
-                tracing::info!(
-                    subsystem = %subsystem_id,
-                    event_type = "subsystem_kill_and_wait",
-                    "killing child process and awaiting exit to release file locks"
-                );
-
-                let kill_result = child.kill().await;
-                if let Err(kill_error) = kill_result {
-                    tracing::warn!(
-                        subsystem = %subsystem_id,
-                        error = %kill_error,
-                        "child.kill() failed — process may already be dead"
-                    );
-                }
-
-                match tokio::time::timeout(
-                    Duration::from_millis(2000),
-                    child.wait(),
-                )
-                .await
-                {
-                    Ok(Ok(exit_status)) => {
-                        tracing::info!(
-                            subsystem = %subsystem_id,
-                            event_type = "subsystem_exit_confirmed",
-                            exit_code = exit_status.code().unwrap_or(-1),
-                            "child process exited — file locks released"
-                        );
-                    }
-                    Ok(Err(wait_error)) => {
-                        tracing::warn!(
-                            subsystem = %subsystem_id,
-                            error = %wait_error,
-                            "child.wait() failed after kill"
-                        );
-                    }
-                    Err(_elapsed) => {
-                        tracing::warn!(
-                            subsystem = %subsystem_id,
-                            event_type = "subsystem_exit_timeout",
-                            timeout_ms = 2000u64,
-                            "timed out waiting for child process to exit"
-                        );
-                    }
-                }
-            } else {
-                // Path B: watcher already claimed the child. The abort in
-                // Phase 2 will cancel the watcher at child.wait(), dropping
-                // the Child and firing kill_on_drop. Await the handle (with
-                // a timeout) to confirm the task has been fully cancelled.
-                tracing::debug!(
-                    subsystem = %subsystem_id,
-                    event_type = "subsystem_child_claimed_by_watcher",
-                    "child slot empty — awaiting aborted watcher for kill_on_drop confirmation"
-                );
-
-                if let Some(handle) = handle_opt {
-                    match tokio::time::timeout(
-                        Duration::from_millis(2000),
-                        handle,
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            tracing::debug!(
-                                subsystem = %subsystem_id,
-                                event_type = "subsystem_watcher_cancelled",
-                                "aborted watcher task resolved — kill_on_drop confirmed"
-                            );
-                        }
-                        Err(_elapsed) => {
-                            tracing::warn!(
-                                subsystem = %subsystem_id,
-                                event_type = "subsystem_watcher_cancel_timeout",
-                                timeout_ms = 2000u64,
-                                "timed out waiting for aborted watcher task to resolve"
-                            );
-                        }
-                    }
-                }
-            }
+            tracing::info!(
+                subsystem = %process_entry.config.subsystem_id,
+                event_type = "subsystem_stopped",
+                subsystem_name = %subsystem_name,
+                "subsystem stopped during supervisor shutdown"
+            );
         }
     }
 }
