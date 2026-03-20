@@ -1,0 +1,4 @@
+name = "prompt-composer"
+language = "rust"
+responsibility = "Dynamic prompt assembly with TOON encoding, sacred content enforcement, and context window management"
+capability_flags = ["PROMPT_COMPOSER_READY"]

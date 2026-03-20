@@ -1,0 +1,17 @@
+# sena-ui configuration
+
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+reactive_loop_address = "http://127.0.0.1:50058"
+connection_timeout_ms = 5000
+
+[window]
+title = "Sena"
+width = 800
+height = 600
+min_width = 400
+min_height = 300
+
+[logging]
+level = "info"
+format = "pretty"

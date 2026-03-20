@@ -30,6 +30,8 @@ enum BootSignal {
   INFERENCE_DEGRADED = 14;     // OOM or partial failure; partial recovery in progress.
   // SoulBox signals.
   SOULBOX_READY = 15;          // Schema loaded and encryption verified.
+  PROMPT_COMPOSER_READY = 16;
+  REACTIVE_LOOP_READY = 17;
 }
 
 message BootSignalRequest {
@@ -471,4 +473,102 @@ service InferenceService {
   rpc ReadActivations(ActivationRequest) returns (ActivationResponse);
   // Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
   rpc Steer(SteeringRequest) returns (SteeringAck);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PromptComposerService
+// ─────────────────────────────────────────────────────────────────────────────
+
+// prompt-composer sits between CTP and inference. It receives a PromptContext,
+// applies TOON encoding via ESU, enforces sacred content rules, manages the
+// context window budget, and returns the assembled prompt string.
+
+message PromptContextEntry {
+  string id = 1;
+  string content = 2;
+  float relevance_score = 3;
+  string tier = 4;  // "short_term" | "long_term" | "episodic"
+}
+
+message TelemetrySignal {
+  string signal_type = 1;
+  string value = 2;
+  float relevance_score = 3;
+}
+
+message ModelProfile {
+  string model_id = 1;
+  uint32 context_window = 2;
+  uint32 output_reserve = 3;
+}
+
+message PromptContext {
+  // Sacred content — never dropped regardless of context window pressure.
+  string soulbox_snapshot = 1;
+  string user_intent = 2;
+  // User message for this turn.
+  string user_message = 3;
+  // Memory tiers.
+  repeated PromptContextEntry short_term = 4;
+  repeated PromptContextEntry long_term = 5;
+  repeated PromptContextEntry episodic = 6;
+  // OS context and telemetry.
+  string os_context = 7;
+  repeated TelemetrySignal telemetry_signals = 8;
+  // Model capability profile — drives context window budget.
+  ModelProfile model_profile = 9;
+  // Trace context for cross-subsystem correlation.
+  string trace_context = 10;
+}
+
+message AssemblePromptRequest {
+  PromptContext context = 1;
+  string request_id = 2;
+}
+
+message PromptAssemblyTrace {
+  uint32 token_count = 1;
+  uint32 token_budget = 2;
+  repeated string included_tiers = 3;
+  repeated string dropped_tiers = 4;
+  string encoding_used = 5;
+}
+
+message AssemblePromptResponse {
+  string assembled_prompt = 1;
+  PromptAssemblyTrace assembly_trace = 2;
+  string request_id = 3;
+}
+
+service PromptComposerService {
+  // Assemble a fully encoded prompt from the provided context.
+  rpc AssemblePrompt(AssemblePromptRequest) returns (AssemblePromptResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UserMessageService
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The reactive loop exposes this service for user-facing message handling.
+// The UI and any external clients send messages here. The reactive loop
+// orchestrates the full flow: event publish → context → prompt → inference → response.
+
+message UserMessageRequest {
+  string message = 1;
+  string trace_context = 2;
+}
+
+message UserMessageResponse {
+  string response = 1;
+  string model_id = 2;
+  uint32 tokens_generated = 3;
+  uint32 tokens_prompt = 4;
+  uint64 latency_ms = 5;
+  string request_id = 6;
+  PromptAssemblyTrace assembly_trace = 7;
+}
+
+service UserMessageService {
+  // Send a user message and receive Sena's response.
+  rpc SendMessage(UserMessageRequest) returns (UserMessageResponse);
 }

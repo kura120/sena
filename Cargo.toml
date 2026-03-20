@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "daemon-bus",
+    "inference",
+    "memory-engine",
+    "model-probe",
+    "prompt-composer",
+    "reactive-loop",
+    "ui",
+]

@@ -73,11 +73,23 @@ timeout_ms = 10000
 required = false
 depends_on = ["MODEL_PROFILE_READY"]
 
+[boot.subsystems.prompt_composer]
+signal = "PROMPT_COMPOSER_READY"
+timeout_ms = 5000
+required = true
+depends_on = ["MEMORY_ENGINE_READY"]
+
 [boot.subsystems.ctp]
 signal = "CTP_READY"
 timeout_ms = 5000
 required = true
 depends_on = ["MEMORY_ENGINE_READY", "MODEL_PROFILE_READY"]
+
+[boot.subsystems.reactive_loop]
+signal = "REACTIVE_LOOP_READY"
+timeout_ms = 5000
+required = true
+depends_on = ["PROMPT_COMPOSER_READY", "INFERENCE_READY"]
 
 [boot.subsystems.ui]
 signal = "UI_READY"
@@ -113,6 +125,18 @@ subsystem_id = "memory_engine"
 command = "memory-engine"
 args = []
 working_directory = "../memory-engine"
+
+[supervisor.subsystems.prompt_composer]
+subsystem_id = "prompt_composer"
+command = "prompt-composer"
+args = []
+working_directory = "../prompt-composer"
+
+[supervisor.subsystems.reactive_loop]
+subsystem_id = "reactive_loop"
+command = "reactive-loop"
+args = []
+working_directory = "../reactive-loop"
 
 [supervisor.subsystems.agents]
 subsystem_id = "agents"

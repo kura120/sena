@@ -278,6 +278,210 @@ pub struct SenaErrorProto {
     #[prost(string, tag = "2")]
     pub message: ::prost::alloc::string::String,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CompleteRequest {
+    /// Fully assembled TOON-encoded prompt from prompt-composer.
+    #[prost(string, tag = "1")]
+    pub prompt: ::prost::alloc::string::String,
+    /// Target model ID from the registry. Empty string means the active model.
+    #[prost(string, tag = "2")]
+    pub model_id: ::prost::alloc::string::String,
+    /// Maximum number of tokens to generate.
+    #[prost(uint32, tag = "3")]
+    pub max_tokens: u32,
+    /// Sampling temperature. 0.0 for deterministic probes; SoulBox-defined for normal inference.
+    #[prost(float, tag = "4")]
+    pub temperature: f32,
+    /// Priority tier mapped to the global PriorityTier enum values.
+    #[prost(int32, tag = "5")]
+    pub priority: i32,
+    /// Unique per-call trace ID for correlation across subsystems.
+    #[prost(string, tag = "6")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CompleteResponse {
+    /// The generated completion text.
+    #[prost(string, tag = "1")]
+    pub text: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub tokens_generated: u32,
+    #[prost(uint32, tag = "3")]
+    pub tokens_prompt: u32,
+    /// Which model actually served the request (may differ from request.model_id if fallback occurred).
+    #[prost(string, tag = "4")]
+    pub model_id: ::prost::alloc::string::String,
+    /// Echoed from CompleteRequest for correlation.
+    #[prost(string, tag = "5")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StreamCompleteChunk {
+    /// One token of the streamed response.
+    #[prost(string, tag = "1")]
+    pub token: ::prost::alloc::string::String,
+    /// True on the final chunk; subsequent chunks must not be expected.
+    #[prost(bool, tag = "2")]
+    pub finished: bool,
+    /// Echoed from CompleteRequest for correlation.
+    #[prost(string, tag = "3")]
+    pub request_id: ::prost::alloc::string::String,
+}
+/// Phase 2 stub — message defined now; implementation deferred.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActivationRequest {
+    /// Which transformer layer to read activations from.
+    #[prost(uint32, tag = "1")]
+    pub layer: u32,
+    #[prost(string, tag = "2")]
+    pub request_id: ::prost::alloc::string::String,
+}
+/// Phase 2 stub — message defined now; implementation deferred.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActivationResponse {
+    #[prost(uint32, tag = "1")]
+    pub layer: u32,
+    /// Activation vector at the requested layer.
+    #[prost(float, repeated, tag = "2")]
+    pub values: ::prost::alloc::vec::Vec<f32>,
+    #[prost(string, tag = "3")]
+    pub request_id: ::prost::alloc::string::String,
+}
+/// Phase 3 stub — message defined now; implementation deferred.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SteeringRequest {
+    /// Which transformer layer to apply the steering vector at.
+    #[prost(uint32, tag = "1")]
+    pub layer: u32,
+    /// The steering direction vector.
+    #[prost(float, repeated, tag = "2")]
+    pub direction: ::prost::alloc::vec::Vec<f32>,
+    /// How strongly to apply the direction.
+    #[prost(float, tag = "3")]
+    pub magnitude: f32,
+    #[prost(string, tag = "4")]
+    pub request_id: ::prost::alloc::string::String,
+}
+/// Phase 3 stub — message defined now; implementation deferred.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SteeringAck {
+    #[prost(bool, tag = "1")]
+    pub applied: bool,
+    #[prost(string, tag = "2")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PromptContextEntry {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub content: ::prost::alloc::string::String,
+    #[prost(float, tag = "3")]
+    pub relevance_score: f32,
+    /// "short_term" | "long_term" | "episodic"
+    #[prost(string, tag = "4")]
+    pub tier: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TelemetrySignal {
+    #[prost(string, tag = "1")]
+    pub signal_type: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+    #[prost(float, tag = "3")]
+    pub relevance_score: f32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ModelProfile {
+    #[prost(string, tag = "1")]
+    pub model_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub context_window: u32,
+    #[prost(uint32, tag = "3")]
+    pub output_reserve: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PromptContext {
+    /// Sacred content — never dropped regardless of context window pressure.
+    #[prost(string, tag = "1")]
+    pub soulbox_snapshot: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub user_intent: ::prost::alloc::string::String,
+    /// User message for this turn.
+    #[prost(string, tag = "3")]
+    pub user_message: ::prost::alloc::string::String,
+    /// Memory tiers.
+    #[prost(message, repeated, tag = "4")]
+    pub short_term: ::prost::alloc::vec::Vec<PromptContextEntry>,
+    #[prost(message, repeated, tag = "5")]
+    pub long_term: ::prost::alloc::vec::Vec<PromptContextEntry>,
+    #[prost(message, repeated, tag = "6")]
+    pub episodic: ::prost::alloc::vec::Vec<PromptContextEntry>,
+    /// OS context and telemetry.
+    #[prost(string, tag = "7")]
+    pub os_context: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "8")]
+    pub telemetry_signals: ::prost::alloc::vec::Vec<TelemetrySignal>,
+    /// Model capability profile — drives context window budget.
+    #[prost(message, optional, tag = "9")]
+    pub model_profile: ::core::option::Option<ModelProfile>,
+    /// Trace context for cross-subsystem correlation.
+    #[prost(string, tag = "10")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssemblePromptRequest {
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<PromptContext>,
+    #[prost(string, tag = "2")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PromptAssemblyTrace {
+    #[prost(uint32, tag = "1")]
+    pub token_count: u32,
+    #[prost(uint32, tag = "2")]
+    pub token_budget: u32,
+    #[prost(string, repeated, tag = "3")]
+    pub included_tiers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "4")]
+    pub dropped_tiers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "5")]
+    pub encoding_used: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssemblePromptResponse {
+    #[prost(string, tag = "1")]
+    pub assembled_prompt: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub assembly_trace: ::core::option::Option<PromptAssemblyTrace>,
+    #[prost(string, tag = "3")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UserMessageRequest {
+    #[prost(string, tag = "1")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UserMessageResponse {
+    #[prost(string, tag = "1")]
+    pub response: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub model_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub tokens_generated: u32,
+    #[prost(uint32, tag = "4")]
+    pub tokens_prompt: u32,
+    #[prost(uint64, tag = "5")]
+    pub latency_ms: u64,
+    #[prost(string, tag = "6")]
+    pub request_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "7")]
+    pub assembly_trace: ::core::option::Option<PromptAssemblyTrace>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum BootSignal {
@@ -292,6 +496,20 @@ pub enum BootSignal {
     CtpReady = 9,
     UiReady = 10,
     SenaReady = 11,
+    /// Inference subsystem lifecycle signals.
+    ///
+    /// Model is loaded and ready to serve completions.
+    InferenceReady = 12,
+    /// Model switching in progress or unrecoverable error.
+    InferenceUnavailable = 13,
+    /// OOM or partial failure; partial recovery in progress.
+    InferenceDegraded = 14,
+    /// SoulBox signals.
+    ///
+    /// Schema loaded and encryption verified.
+    SoulboxReady = 15,
+    PromptComposerReady = 16,
+    ReactiveLoopReady = 17,
 }
 impl BootSignal {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -311,6 +529,12 @@ impl BootSignal {
             Self::CtpReady => "CTP_READY",
             Self::UiReady => "UI_READY",
             Self::SenaReady => "SENA_READY",
+            Self::InferenceReady => "INFERENCE_READY",
+            Self::InferenceUnavailable => "INFERENCE_UNAVAILABLE",
+            Self::InferenceDegraded => "INFERENCE_DEGRADED",
+            Self::SoulboxReady => "SOULBOX_READY",
+            Self::PromptComposerReady => "PROMPT_COMPOSER_READY",
+            Self::ReactiveLoopReady => "REACTIVE_LOOP_READY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -327,6 +551,12 @@ impl BootSignal {
             "CTP_READY" => Some(Self::CtpReady),
             "UI_READY" => Some(Self::UiReady),
             "SENA_READY" => Some(Self::SenaReady),
+            "INFERENCE_READY" => Some(Self::InferenceReady),
+            "INFERENCE_UNAVAILABLE" => Some(Self::InferenceUnavailable),
+            "INFERENCE_DEGRADED" => Some(Self::InferenceDegraded),
+            "SOULBOX_READY" => Some(Self::SoulboxReady),
+            "PROMPT_COMPOSER_READY" => Some(Self::PromptComposerReady),
+            "REACTIVE_LOOP_READY" => Some(Self::ReactiveLoopReady),
             _ => None,
         }
     }
@@ -361,6 +591,24 @@ pub enum EventTopic {
     /// User-facing reactive loop
     TopicUserMessageReceived = 60,
     TopicUserMessageResponse = 61,
+    /// CTP events
+    ///
+    /// A thought passed threshold and is ready to surface.
+    TopicThoughtSurfaced = 62,
+    /// Session context has been compacted.
+    TopicSessionCompactionTriggered = 63,
+    /// CTP requesting memory-engine to run consolidation.
+    TopicMemoryConsolidationRequested = 64,
+    /// Inference events
+    ///
+    /// Model unload started; callers should expect UNAVAILABLE.
+    TopicInferenceModelSwitching = 65,
+    /// Agent registry events
+    ///
+    /// A community agent passed review and was added to the registry.
+    TopicAgentRegistered = 66,
+    /// A community agent failed review and was moved to quarantine.
+    TopicAgentQuarantined = 67,
 }
 impl EventTopic {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -389,6 +637,14 @@ impl EventTopic {
             Self::TopicLoraTrainingRecommended => "TOPIC_LORA_TRAINING_RECOMMENDED",
             Self::TopicUserMessageReceived => "TOPIC_USER_MESSAGE_RECEIVED",
             Self::TopicUserMessageResponse => "TOPIC_USER_MESSAGE_RESPONSE",
+            Self::TopicThoughtSurfaced => "TOPIC_THOUGHT_SURFACED",
+            Self::TopicSessionCompactionTriggered => "TOPIC_SESSION_COMPACTION_TRIGGERED",
+            Self::TopicMemoryConsolidationRequested => {
+                "TOPIC_MEMORY_CONSOLIDATION_REQUESTED"
+            }
+            Self::TopicInferenceModelSwitching => "TOPIC_INFERENCE_MODEL_SWITCHING",
+            Self::TopicAgentRegistered => "TOPIC_AGENT_REGISTERED",
+            Self::TopicAgentQuarantined => "TOPIC_AGENT_QUARANTINED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -414,6 +670,16 @@ impl EventTopic {
             "TOPIC_LORA_TRAINING_RECOMMENDED" => Some(Self::TopicLoraTrainingRecommended),
             "TOPIC_USER_MESSAGE_RECEIVED" => Some(Self::TopicUserMessageReceived),
             "TOPIC_USER_MESSAGE_RESPONSE" => Some(Self::TopicUserMessageResponse),
+            "TOPIC_THOUGHT_SURFACED" => Some(Self::TopicThoughtSurfaced),
+            "TOPIC_SESSION_COMPACTION_TRIGGERED" => {
+                Some(Self::TopicSessionCompactionTriggered)
+            }
+            "TOPIC_MEMORY_CONSOLIDATION_REQUESTED" => {
+                Some(Self::TopicMemoryConsolidationRequested)
+            }
+            "TOPIC_INFERENCE_MODEL_SWITCHING" => Some(Self::TopicInferenceModelSwitching),
+            "TOPIC_AGENT_REGISTERED" => Some(Self::TopicAgentRegistered),
+            "TOPIC_AGENT_QUARANTINED" => Some(Self::TopicAgentQuarantined),
             _ => None,
         }
     }
@@ -1498,6 +1764,454 @@ pub mod memory_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("sena.daemonbus.v1.MemoryService", "Promote"));
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated client implementations.
+pub mod inference_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct InferenceServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl InferenceServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> InferenceServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InferenceServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            InferenceServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /// Run a full completion. Blocks until generation is complete.
+        pub async fn complete(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CompleteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CompleteResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/Complete",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("sena.daemonbus.v1.InferenceService", "Complete"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Run a streamed completion. Server pushes one chunk per token.
+        pub async fn stream_complete(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CompleteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::StreamCompleteChunk>>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/StreamComplete",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "sena.daemonbus.v1.InferenceService",
+                        "StreamComplete",
+                    ),
+                );
+            self.inner.server_streaming(req, path, codec).await
+        }
+        /// Read transformer layer activations. Phase 2 — stub only; not yet implemented.
+        pub async fn read_activations(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ActivationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ActivationResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/ReadActivations",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "sena.daemonbus.v1.InferenceService",
+                        "ReadActivations",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
+        pub async fn steer(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SteeringRequest>,
+        ) -> std::result::Result<tonic::Response<super::SteeringAck>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/Steer",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("sena.daemonbus.v1.InferenceService", "Steer"));
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated client implementations.
+pub mod prompt_composer_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct PromptComposerServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl PromptComposerServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> PromptComposerServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> PromptComposerServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            PromptComposerServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /// Assemble a fully encoded prompt from the provided context.
+        pub async fn assemble_prompt(
+            &mut self,
+            request: impl tonic::IntoRequest<super::AssemblePromptRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AssemblePromptResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.PromptComposerService/AssemblePrompt",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "sena.daemonbus.v1.PromptComposerService",
+                        "AssemblePrompt",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated client implementations.
+pub mod user_message_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct UserMessageServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl UserMessageServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> UserMessageServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> UserMessageServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            UserMessageServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /// Send a user message and receive Sena's response.
+        pub async fn send_message(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UserMessageRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UserMessageResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.UserMessageService/SendMessage",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "sena.daemonbus.v1.UserMessageService",
+                        "SendMessage",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
     }
@@ -3074,6 +3788,720 @@ pub mod memory_service_server {
     /// Generated gRPC service name
     pub const SERVICE_NAME: &str = "sena.daemonbus.v1.MemoryService";
     impl<T> tonic::server::NamedService for MemoryServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+/// Generated server implementations.
+pub mod inference_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with InferenceServiceServer.
+    #[async_trait]
+    pub trait InferenceService: std::marker::Send + std::marker::Sync + 'static {
+        /// Run a full completion. Blocks until generation is complete.
+        async fn complete(
+            &self,
+            request: tonic::Request<super::CompleteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CompleteResponse>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamComplete method.
+        type StreamCompleteStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::StreamCompleteChunk, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Run a streamed completion. Server pushes one chunk per token.
+        async fn stream_complete(
+            &self,
+            request: tonic::Request<super::CompleteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamCompleteStream>,
+            tonic::Status,
+        >;
+        /// Read transformer layer activations. Phase 2 — stub only; not yet implemented.
+        async fn read_activations(
+            &self,
+            request: tonic::Request<super::ActivationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ActivationResponse>,
+            tonic::Status,
+        >;
+        /// Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
+        async fn steer(
+            &self,
+            request: tonic::Request<super::SteeringRequest>,
+        ) -> std::result::Result<tonic::Response<super::SteeringAck>, tonic::Status>;
+    }
+    #[derive(Debug)]
+    pub struct InferenceServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> InferenceServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for InferenceServiceServer<T>
+    where
+        T: InferenceService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::BoxBody>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/sena.daemonbus.v1.InferenceService/Complete" => {
+                    #[allow(non_camel_case_types)]
+                    struct CompleteSvc<T: InferenceService>(pub Arc<T>);
+                    impl<
+                        T: InferenceService,
+                    > tonic::server::UnaryService<super::CompleteRequest>
+                    for CompleteSvc<T> {
+                        type Response = super::CompleteResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CompleteRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as InferenceService>::complete(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CompleteSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/sena.daemonbus.v1.InferenceService/StreamComplete" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamCompleteSvc<T: InferenceService>(pub Arc<T>);
+                    impl<
+                        T: InferenceService,
+                    > tonic::server::ServerStreamingService<super::CompleteRequest>
+                    for StreamCompleteSvc<T> {
+                        type Response = super::StreamCompleteChunk;
+                        type ResponseStream = T::StreamCompleteStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CompleteRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as InferenceService>::stream_complete(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamCompleteSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/sena.daemonbus.v1.InferenceService/ReadActivations" => {
+                    #[allow(non_camel_case_types)]
+                    struct ReadActivationsSvc<T: InferenceService>(pub Arc<T>);
+                    impl<
+                        T: InferenceService,
+                    > tonic::server::UnaryService<super::ActivationRequest>
+                    for ReadActivationsSvc<T> {
+                        type Response = super::ActivationResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ActivationRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as InferenceService>::read_activations(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ReadActivationsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/sena.daemonbus.v1.InferenceService/Steer" => {
+                    #[allow(non_camel_case_types)]
+                    struct SteerSvc<T: InferenceService>(pub Arc<T>);
+                    impl<
+                        T: InferenceService,
+                    > tonic::server::UnaryService<super::SteeringRequest>
+                    for SteerSvc<T> {
+                        type Response = super::SteeringAck;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SteeringRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as InferenceService>::steer(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SteerSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(empty_body());
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for InferenceServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "sena.daemonbus.v1.InferenceService";
+    impl<T> tonic::server::NamedService for InferenceServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+/// Generated server implementations.
+pub mod prompt_composer_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with PromptComposerServiceServer.
+    #[async_trait]
+    pub trait PromptComposerService: std::marker::Send + std::marker::Sync + 'static {
+        /// Assemble a fully encoded prompt from the provided context.
+        async fn assemble_prompt(
+            &self,
+            request: tonic::Request<super::AssemblePromptRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AssemblePromptResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct PromptComposerServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> PromptComposerServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>>
+    for PromptComposerServiceServer<T>
+    where
+        T: PromptComposerService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::BoxBody>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/sena.daemonbus.v1.PromptComposerService/AssemblePrompt" => {
+                    #[allow(non_camel_case_types)]
+                    struct AssemblePromptSvc<T: PromptComposerService>(pub Arc<T>);
+                    impl<
+                        T: PromptComposerService,
+                    > tonic::server::UnaryService<super::AssemblePromptRequest>
+                    for AssemblePromptSvc<T> {
+                        type Response = super::AssemblePromptResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::AssemblePromptRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PromptComposerService>::assemble_prompt(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = AssemblePromptSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(empty_body());
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for PromptComposerServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "sena.daemonbus.v1.PromptComposerService";
+    impl<T> tonic::server::NamedService for PromptComposerServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+/// Generated server implementations.
+pub mod user_message_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with UserMessageServiceServer.
+    #[async_trait]
+    pub trait UserMessageService: std::marker::Send + std::marker::Sync + 'static {
+        /// Send a user message and receive Sena's response.
+        async fn send_message(
+            &self,
+            request: tonic::Request<super::UserMessageRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UserMessageResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct UserMessageServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> UserMessageServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for UserMessageServiceServer<T>
+    where
+        T: UserMessageService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::BoxBody>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/sena.daemonbus.v1.UserMessageService/SendMessage" => {
+                    #[allow(non_camel_case_types)]
+                    struct SendMessageSvc<T: UserMessageService>(pub Arc<T>);
+                    impl<
+                        T: UserMessageService,
+                    > tonic::server::UnaryService<super::UserMessageRequest>
+                    for SendMessageSvc<T> {
+                        type Response = super::UserMessageResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UserMessageRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as UserMessageService>::send_message(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SendMessageSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(empty_body());
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for UserMessageServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "sena.daemonbus.v1.UserMessageService";
+    impl<T> tonic::server::NamedService for UserMessageServiceServer<T> {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
