@@ -23,6 +23,7 @@ use crate::error::{ErrorCode, SenaError, SenaResult};
 pub struct Config {
     pub grpc: GrpcConfig,
     pub boot: BootConfig,
+    pub store: StorePathsConfig,
     pub tier: TierConfig,
     pub decay: DecayConfig,
     pub queue: QueueConfig,
@@ -64,6 +65,22 @@ impl Config {
 
         Ok(config)
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Store paths
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Filesystem paths for ech0's persistent storage backends.
+///
+/// ech0 uses two separate files: a redb graph database and a usearch vector
+/// index. Both paths are relative to the memory-engine process working directory.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StorePathsConfig {
+    /// Path to the redb graph database file (e.g. `data/graph.redb`).
+    pub graph_path: String,
+    /// Path to the usearch vector index file (e.g. `data/vectors.usearch`).
+    pub vector_path: String,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -262,6 +279,10 @@ embedding_dim = 768
 batch_size = 32
 gpu_layers = 99
 
+[store]
+graph_path = "data/graph.redb"
+vector_path = "data/vectors.usearch"
+
 [extractor]
 model_path = "models/default.gguf"
 gpu_layers = 99
@@ -290,6 +311,8 @@ slow_operation_threshold_ms = 100
         assert_eq!(config.grpc.listen_port, 50053);
         assert_eq!(config.grpc.connect_timeout_ms, 5000);
         assert_eq!(config.boot.ready_signal_timeout_ms, 15000);
+        assert_eq!(config.store.graph_path, "data/graph.redb");
+        assert_eq!(config.store.vector_path, "data/vectors.usearch");
         assert_eq!(config.tier.short_term.max_entries, 256);
         assert_eq!(config.tier.long_term.max_entries, 10000);
         assert_eq!(config.tier.episodic.max_entries, 50000);

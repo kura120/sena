@@ -138,6 +138,34 @@ impl EventBusService for EventBusServiceHandler {
         // the mpsc sender detects the receiver (gRPC sink) has disconnected.
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<BusEvent, Status>>(64);
 
+        // If this subscriber is interested in boot signals (or all topics),
+        // replay every boot signal that fired before this subscription was
+        // created. The broadcast receiver was created above — any events
+        // published AFTER that subscribe() call are already queued there.
+        // Events published BEFORE (e.g. DAEMON_BUS_READY) are in the replay
+        // cache and are sent here so the subscriber never misses them.
+        let wants_boot_signals = topics_of_interest.is_empty()
+            || topics_of_interest.contains(&EventTopic::TopicBootSignal);
+
+        if wants_boot_signals {
+            let past_signals = self.event_bus.boot_signal_snapshot();
+            for past_event in past_signals {
+                tracing::debug!(
+                    subsystem = "daemon_bus",
+                    event_type = "event_bus_grpc_boot_signal_replayed",
+                    subscriber_id = %subscriber_id,
+                    topic = ?past_event.topic,
+                    source = %past_event.source_subsystem,
+                    "replaying already-fired boot signal to new subscriber"
+                );
+                let proto_event = internal_event_to_proto(past_event);
+                if tx.send(Ok(proto_event)).await.is_err() {
+                    // Subscriber disconnected during replay — stop immediately.
+                    return Ok(Response::new(ReceiverStream::new(rx)));
+                }
+            }
+        }
+
         let subscriber_id_clone = subscriber_id.clone();
         tokio::spawn(async move {
             loop {
