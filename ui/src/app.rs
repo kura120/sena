@@ -12,12 +12,17 @@ use crate::theme;
 /// Provides the top-level layout with header, main content area, and debug panel overlay.
 pub fn app(
     debug_state_handle: Arc<RwLock<DebugState>>,
-    panel_width: f64,
     panel_title: &'static str,
     inspect_label: &'static str,
-    thought_empty_message: &'static str,
     event_empty_message: &'static str,
+    boot_empty_message: &'static str,
     connection_status_label: &'static str,
+    boot_history_title: &'static str,
+    uptime_label: &'static str,
+    events_label: &'static str,
+    connected_label: &'static str,
+    required_badge_label: &'static str,
+    optional_badge_label: &'static str,
 ) -> impl IntoElement {
     let mut panel_open = use_state(|| false);
 
@@ -36,7 +41,7 @@ pub fn app(
                     writer.set(state.clone());
                 }
                 // Refresh at ~4 Hz to stay responsive without thrashing.
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                async_std::task::sleep(std::time::Duration::from_millis(250)).await;
             }
         });
     });
@@ -53,7 +58,7 @@ pub fn app(
         .width(Size::fill())
         .height(Size::fill())
         .background(theme::APP_BACKGROUND)
-        .on_key_up(move |event: Event<KeyboardEventData>| {
+        .on_global_key_up(move |event: Event<KeyboardEventData>| {
             if event.key == Key::Named(NamedKey::F12) {
                 let current = *panel_open.read();
                 panel_open.set(!current);
@@ -80,40 +85,36 @@ pub fn app(
                 )
                 .child(inspect_button(inspect_label, toggle)),
         )
-        // Body: main content + optional debug panel.
-        .child(
-            rect()
-                .width(Size::fill())
-                .height(Size::fill())
-                .direction(Direction::Horizontal)
-                // Main content area.
-                .child(
-                    rect()
-                        .width(Size::fill())
-                        .height(Size::fill())
-                        .child(
-                            rect()
-                                .width(Size::fill())
-                                .height(Size::fill())
-                                .main_align(Alignment::Center)
-                                .cross_align(Alignment::Center)
-                                .child(
-                                    label()
-                                        .font_size(14.0)
-                                        .color(theme::TEXT_MUTED)
-                                        .text("Main content area"),
-                                ),
-                        ),
-                )
-                // Debug panel overlay.
-                .child(debug_panel(
-                    is_open,
-                    panel_width,
-                    &snapshot,
-                    panel_title,
-                    thought_empty_message,
-                    event_empty_message,
-                    connection_status_label,
-                )),
-        )
+        // Body: main content or debug panel (debug panel replaces main content when open).
+        .child(if is_open {
+            debug_panel(
+                is_open,
+                &snapshot,
+                panel_title,
+                event_empty_message,
+                boot_empty_message,
+                connection_status_label,
+                boot_history_title,
+                uptime_label,
+                events_label,
+                connected_label,
+                required_badge_label,
+                optional_badge_label,
+            )
+        } else {
+            // Main content area placeholder.
+            Element::from(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::fill())
+                    .main_align(Alignment::Center)
+                    .cross_align(Alignment::Center)
+                    .child(
+                        label()
+                            .font_size(14.0)
+                            .color(theme::TEXT_MUTED)
+                            .text("Main content area"),
+                    ),
+            )
+        })
 }

@@ -337,9 +337,14 @@ impl BootOrchestrator {
         }
 
         // Publish the signal to the event bus.
-        let _receiver_count = self.inner.event_bus.publish(InternalBusEvent::signal(
+        // Include the signal name as a JSON payload so subscribers (e.g. the
+        // debug UI) can identify which signal fired without needing side-channel
+        // knowledge of the source_subsystem → signal mapping.
+        let signal_payload = format!("{{\"signal\":\"{}\"}}", signal_name).into_bytes();
+        let _receiver_count = self.inner.event_bus.publish(InternalBusEvent::new(
             EventTopic::TopicBootSignal,
             subsystem_id,
+            signal_payload,
             "",
         ));
 
@@ -408,10 +413,11 @@ impl BootOrchestrator {
         // happen during boot — but we handle it gracefully regardless.
         let _send_result = self.inner.phase.send(BootPhase::Ready);
 
-        // Publish SENA_READY to the event bus.
-        let _receiver_count = self.inner.event_bus.publish(InternalBusEvent::signal(
+        // Publish SENA_READY to the event bus with signal name in payload.
+        let _receiver_count = self.inner.event_bus.publish(InternalBusEvent::new(
             EventTopic::TopicBootSignal,
             "daemon_bus",
+            br#"{"signal":"SENA_READY"}"#.to_vec(),
             "",
         ));
 

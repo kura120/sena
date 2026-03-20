@@ -66,18 +66,41 @@ pub struct BusEventEntry {
     pub timestamp: DateTime<Utc>,
 }
 
+/// A boot signal received from daemon-bus, for the boot signal history panel.
+#[derive(Debug, Clone)]
+pub struct BootSignalEntry {
+    pub signal_name: String,
+    pub source_subsystem: String,
+    pub required: bool,
+    pub timestamp: DateTime<Utc>,
+}
+
 /// All known subsystem identifiers in Sena.
+/// Keys always use hyphens — never underscores.
 pub const KNOWN_SUBSYSTEMS: &[&str] = &[
     "daemon-bus",
-    "inference",
     "memory-engine",
+    "inference",
     "model-probe",
+    "lora-manager",
     "ctp",
     "prompt-composer",
     "soulbox",
     "agents",
-    "lora-manager",
-    "codebase-context",
+    "platform",
+    "ui",
+];
+
+/// Boot signals that are required for Sena to reach SENA_READY.
+pub const REQUIRED_BOOT_SIGNALS: &[&str] = &[
+    "DAEMON_BUS_READY",
+    "MEMORY_ENGINE_READY",
+    "PLATFORM_READY",
+    "AGENTS_READY",
+    "INFERENCE_READY",
+    "SOULBOX_READY",
+    "PROMPT_COMPOSER_READY",
+    "CTP_READY",
 ];
 
 /// All state for the debug panel, updated from daemon-bus event streams.
@@ -92,6 +115,10 @@ pub struct DebugState {
     pub event_feed: VecDeque<BusEventEntry>,
     pub event_feed_max: usize,
     pub connected: bool,
+    pub boot_signal_history: VecDeque<BootSignalEntry>,
+    pub boot_signal_history_max: usize,
+    pub total_events_received: u64,
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 impl DebugState {
@@ -111,6 +138,10 @@ impl DebugState {
             event_feed: VecDeque::with_capacity(event_feed_max),
             event_feed_max,
             connected: false,
+            boot_signal_history: VecDeque::with_capacity(100),
+            boot_signal_history_max: 100,
+            total_events_received: 0,
+            started_at: None,
         }
     }
 
@@ -128,6 +159,14 @@ impl DebugState {
             self.event_feed.pop_back();
         }
         self.event_feed.push_front(event);
+    }
+
+    /// Push a boot signal entry, enforcing the max capacity.
+    pub fn push_boot_signal(&mut self, entry: BootSignalEntry) {
+        if self.boot_signal_history.len() >= self.boot_signal_history_max {
+            self.boot_signal_history.pop_back();
+        }
+        self.boot_signal_history.push_front(entry);
     }
 
     /// Update subsystem health status.
@@ -169,6 +208,25 @@ pub fn format_relative_time(timestamp: DateTime<Utc>) -> String {
     }
     let days = duration.num_days();
     format!("{days}d ago")
+}
+
+/// Format an uptime duration as a human-readable string.
+pub fn format_uptime(started_at: Option<DateTime<Utc>>) -> String {
+    let Some(start) = started_at else {
+        return "—".to_string();
+    };
+    let duration = Utc::now().signed_duration_since(start);
+    let total_seconds = duration.num_seconds().max(0);
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes:02}m {seconds:02}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 /// Format a topic integer value to a human-readable name.
@@ -333,5 +391,38 @@ mod tests {
         let past = Utc::now() - chrono::Duration::minutes(5);
         let result = format_relative_time(past);
         assert!(result.contains("m ago"), "expected minutes ago, got: {result}");
+    }
+
+    #[test]
+    fn test_push_boot_signal_capacity() {
+        let mut state = DebugState::default();
+        for i in 0..110 {
+            state.push_boot_signal(BootSignalEntry {
+                signal_name: format!("SIGNAL_{i}"),
+                source_subsystem: "test".to_string(),
+                required: i % 2 == 0,
+                timestamp: Utc::now(),
+            });
+        }
+        assert_eq!(state.boot_signal_history.len(), 100);
+        // Newest at front
+        assert_eq!(state.boot_signal_history[0].signal_name, "SIGNAL_109");
+    }
+
+    #[test]
+    fn test_format_uptime_none() {
+        assert_eq!(format_uptime(None), "—");
+    }
+
+    #[test]
+    fn test_format_uptime_seconds() {
+        let started = Utc::now() - chrono::Duration::seconds(45);
+        let result = format_uptime(Some(started));
+        assert!(result.contains("s"), "expected seconds format, got: {result}");
+    }
+
+    #[test]
+    fn test_required_boot_signals_not_empty() {
+        assert!(!REQUIRED_BOOT_SIGNALS.is_empty());
     }
 }

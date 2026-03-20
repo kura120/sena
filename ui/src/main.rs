@@ -75,7 +75,6 @@ fn main() {
     });
 
     // Capture config values for the closure.
-    let panel_width = config.debug_panel.width;
     // Intentional leak — title must be 'static for Freya's WindowConfig closure bound.
     let window_title: &'static str = Box::leak(config.window.title.clone().into_boxed_str());
 
@@ -83,12 +82,17 @@ fn main() {
     let app_fn = move || {
         app::app(
             debug_state_for_app.clone(),
-            panel_width,
             "Debug Panel",
             "Inspect",
-            "No thoughts surfaced yet",
             "No events yet",
-            "daemon-bus offline",
+            "No boot signals yet",
+            "Reconnecting",
+            "Boot Signals",
+            "Uptime",
+            "Events",
+            "Connected",
+            "REQ",
+            "OPT",
         )
     };
 

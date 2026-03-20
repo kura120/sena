@@ -43,3 +43,21 @@ pub const VRAM_BAR_TRACK: (u8, u8, u8) = (50, 50, 50);
 
 /// Section header.
 pub const SECTION_HEADER_COLOR: (u8, u8, u8) = (180, 180, 180);
+
+/// Sidebar background (slightly different from main panel).
+pub const SIDEBAR_BACKGROUND: (u8, u8, u8) = (24, 24, 24);
+
+/// Stats bar background.
+pub const STATS_BAR_BACKGROUND: (u8, u8, u8) = (22, 22, 22);
+
+/// Stats bar border (top edge).
+pub const STATS_BAR_BORDER: (u8, u8, u8) = (50, 50, 50);
+
+/// Required boot signal badge color.
+pub const BOOT_REQUIRED_COLOR: (u8, u8, u8) = (76, 175, 80);
+
+/// Optional boot signal badge color.
+pub const BOOT_OPTIONAL_COLOR: (u8, u8, u8) = (100, 100, 100);
+
+/// Section divider between main area panels.
+pub const SECTION_DIVIDER: (u8, u8, u8) = (45, 45, 45);

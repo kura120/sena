@@ -120,7 +120,7 @@ mod tests {
         for name in crate::debug_state::KNOWN_SUBSYSTEMS {
             subsystems.insert((*name).to_string(), SubsystemHealthStatus::Unknown);
         }
-        // Verify we have all 10 subsystems.
-        assert_eq!(subsystems.len(), 10);
+        // Verify we have all 11 subsystems.
+        assert_eq!(subsystems.len(), 11);
     }
 }
