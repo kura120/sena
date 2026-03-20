@@ -1,5 +1,5 @@
 //! Priority request queue for serializing inference calls.
-//! 
+//!
 //! Reactive (tier 1) pops before Standard (tier 3) which pops before
 //! Background (tier 4). Enforces max depth and expires stale requests.
 
@@ -7,10 +7,10 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::time::Instant;
 
-use tokio::sync::{Mutex, Notify, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 
 use crate::error::InferenceError;
-use crate::generated::sena_daemonbus_v1::CompleteResponse;
+use crate::generated::sena_daemonbus_v1::{CompleteResponse, StreamCompleteChunk};
 
 /// Priority tiers matching the global daemon-bus priority system.
 /// Lower numeric value = higher priority.
@@ -37,6 +37,26 @@ impl Priority {
     }
 }
 
+/// Response channel type — either complete or streaming.
+pub enum ResponseChannel {
+    Complete(oneshot::Sender<Result<CompleteResponse, InferenceError>>),
+    Stream(mpsc::Sender<Result<StreamCompleteChunk, InferenceError>>),
+}
+
+impl ResponseChannel {
+    /// Try to send an error, consuming the channel.
+    pub fn try_send_error(self, error: InferenceError) {
+        match self {
+            ResponseChannel::Complete(tx) => {
+                let _send_result = tx.send(Err(error));
+            }
+            ResponseChannel::Stream(tx) => {
+                let _send_result = tx.try_send(Err(error));
+            }
+        }
+    }
+}
+
 /// A request waiting in the queue with its response channel.
 pub struct QueuedRequest {
     /// The TOON-encoded prompt to complete.
@@ -54,7 +74,7 @@ pub struct QueuedRequest {
     /// When this request was enqueued — for timeout checks.
     pub enqueued_at: Instant,
     /// Channel to send the result back to the gRPC handler.
-    pub response_tx: oneshot::Sender<Result<CompleteResponse, InferenceError>>,
+    pub response_channel: ResponseChannel,
 }
 
 // BinaryHeap is a max-heap, so we want higher-priority (lower tier number) to be "greater"
@@ -106,13 +126,12 @@ impl RequestQueue {
     pub async fn push(&self, request: QueuedRequest) -> Result<(), InferenceError> {
         let mut queue = self.inner.lock().await;
         if queue.len() >= self.max_depth {
-            // Send timeout error to the caller before rejecting
-            let _send_result = request.response_tx.send(Err(InferenceError::RequestQueueFull {
-                max_depth: self.max_depth,
-            }));
-            return Err(InferenceError::RequestQueueFull {
-                max_depth: self.max_depth,
-            });
+            let max_depth = self.max_depth;
+            // Send error to the caller before rejecting
+            request
+                .response_channel
+                .try_send_error(InferenceError::RequestQueueFull { max_depth });
+            return Err(InferenceError::RequestQueueFull { max_depth });
         }
         queue.push(request);
         drop(queue); // release lock before notify
@@ -121,7 +140,7 @@ impl RequestQueue {
     }
 
     /// Pop the highest-priority non-expired request. Blocks until one is available.
-    /// Expired requests have timeout errors sent on their response_tx.
+    /// Expired requests have timeout errors sent on their response_channel.
     pub async fn pop(&self) -> Option<QueuedRequest> {
         loop {
             {
@@ -129,10 +148,11 @@ impl RequestQueue {
                 while let Some(request) = queue.pop() {
                     let elapsed_ms = request.enqueued_at.elapsed().as_millis() as u64;
                     if elapsed_ms > self.request_timeout_ms {
+                        let timeout_ms = self.request_timeout_ms;
                         // Send timeout error — if receiver dropped, that's fine
-                        let _send_result = request.response_tx.send(Err(InferenceError::RequestTimeout {
-                            timeout_ms: self.request_timeout_ms,
-                        }));
+                        request
+                            .response_channel
+                            .try_send_error(InferenceError::RequestTimeout { timeout_ms });
                         continue; // try next request
                     }
                     return Some(request);
@@ -154,7 +174,13 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    fn make_request(priority: Priority, request_id: &str) -> (QueuedRequest, oneshot::Receiver<Result<CompleteResponse, InferenceError>>) {
+    fn make_request(
+        priority: Priority,
+        request_id: &str,
+    ) -> (
+        QueuedRequest,
+        oneshot::Receiver<Result<CompleteResponse, InferenceError>>,
+    ) {
         let (tx, rx) = oneshot::channel();
         let req = QueuedRequest {
             prompt: "test prompt".into(),
@@ -164,7 +190,7 @@ mod tests {
             request_id: request_id.into(),
             priority,
             enqueued_at: Instant::now(),
-            response_tx: tx,
+            response_channel: ResponseChannel::Complete(tx),
         };
         (req, rx)
     }
@@ -184,10 +210,10 @@ mod tests {
         let queue = RequestQueue::new(10, 30000);
         let (bg_req, _rx1) = make_request(Priority::Background, "bg");
         let (reactive_req, _rx2) = make_request(Priority::Reactive, "reactive");
-        
+
         queue.push(bg_req).await.expect("test: push bg");
         queue.push(reactive_req).await.expect("test: push reactive");
-        
+
         // Reactive should pop first despite being pushed second
         let first = queue.pop().await.expect("test: should have item");
         assert_eq!(first.request_id, "reactive");
@@ -200,8 +226,11 @@ mod tests {
         let queue = RequestQueue::new(1, 30000);
         let (req1, _rx1) = make_request(Priority::Standard, "r1");
         let (req2, _rx2) = make_request(Priority::Standard, "r2");
-        
-        queue.push(req1).await.expect("test: first push should succeed");
+
+        queue
+            .push(req1)
+            .await
+            .expect("test: first push should succeed");
         let result = queue.push(req2).await;
         assert!(result.is_err());
         match result.expect_err("test: should be queue full") {
@@ -222,19 +251,19 @@ mod tests {
             request_id: "expired".into(),
             priority: Priority::Standard,
             enqueued_at: Instant::now() - Duration::from_secs(1), // already expired
-            response_tx: tx,
+            response_channel: ResponseChannel::Complete(tx),
         };
-        
+
         // Also push a non-expired request so pop doesn't block forever
         let (fresh_req, _rx2) = make_request(Priority::Standard, "fresh");
-        
+
         queue.push(req).await.expect("test: push expired");
         queue.push(fresh_req).await.expect("test: push fresh");
-        
+
         // Should skip expired, return fresh
         let popped = queue.pop().await.expect("test: should get fresh");
         assert_eq!(popped.request_id, "fresh");
-        
+
         // The expired request's receiver should have the timeout error
         let expired_result = rx.await.expect("test: should receive timeout error");
         assert!(expired_result.is_err());
@@ -244,7 +273,7 @@ mod tests {
     async fn test_len_accurate() {
         let queue = RequestQueue::new(10, 30000);
         assert_eq!(queue.len().await, 0);
-        
+
         let (req1, _rx1) = make_request(Priority::Standard, "r1");
         let (req2, _rx2) = make_request(Priority::Standard, "r2");
         queue.push(req1).await.expect("test: push");
@@ -256,17 +285,15 @@ mod tests {
     async fn test_pop_blocks_until_item() {
         let queue = std::sync::Arc::new(RequestQueue::new(10, 30000));
         let queue_clone = std::sync::Arc::clone(&queue);
-        
-        let handle = tokio::spawn(async move {
-            queue_clone.pop().await
-        });
-        
+
+        let handle = tokio::spawn(async move { queue_clone.pop().await });
+
         // Small delay to let pop() start waiting
         tokio::time::sleep(Duration::from_millis(50)).await;
-        
+
         let (req, _rx) = make_request(Priority::Standard, "delayed");
         queue.push(req).await.expect("test: push");
-        
+
         let result = handle.await.expect("test: join handle");
         assert!(result.is_some());
         assert_eq!(result.expect("test: just checked").request_id, "delayed");

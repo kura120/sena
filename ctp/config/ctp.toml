@@ -3,6 +3,10 @@ daemon_bus_address = "http://127.0.0.1:50051"
 memory_engine_address = "http://127.0.0.1:50052"
 connection_timeout_ms = 5000
 
+[memory]
+query_limit = 20
+min_score = 0.3
+
 [surface_thresholds]
 user_active = 0.9
 idle_2min = 0.6

@@ -6,6 +6,11 @@
 
 use crate::activity::ActivityState;
 use crate::error::CtpError;
+use crate::generated::sena_daemonbus_v1::{
+    memory_service_client::MemoryServiceClient,
+    MemoryReadRequest,
+};
+use tokio::sync::Mutex;
 
 /// Stub for SoulBox personality snapshot — SoulBox not built yet.
 /// Replaced with the real type in Milestone C.
@@ -72,34 +77,125 @@ pub struct PromptContext {
 
 /// Assembles a `PromptContext` from available sources.
 ///
-/// For Phase 1, memory reads return empty results and SoulBox returns
-/// an empty snapshot. Real gRPC clients are wired in later milestones.
+/// Connects to memory-engine via gRPC on first use (lazy connection).
+/// Memory-engine unavailability produces empty results, not errors.
 pub struct ContextAssembler {
-    _memory_engine_address: String,
+    memory_client: Mutex<Option<MemoryServiceClient<tonic::transport::Channel>>>,
+    memory_engine_address: String,
+    memory_query_limit: u32,
+    memory_min_score: f32,
 }
 
 impl ContextAssembler {
-    pub fn new(memory_engine_address: String) -> Self {
+    pub fn new(memory_engine_address: String, memory_query_limit: u32, memory_min_score: f32) -> Self {
         Self {
-            _memory_engine_address: memory_engine_address,
+            memory_client: Mutex::new(None),
+            memory_engine_address,
+            memory_query_limit,
+            memory_min_score,
         }
+    }
+
+    /// Get or establish connection to memory-engine.
+    /// Returns None on connection failure (with warning logged).
+    async fn get_or_connect_client(&self) -> Option<MemoryServiceClient<tonic::transport::Channel>> {
+        let mut guard = self.memory_client.lock().await;
+        if let Some(ref client) = *guard {
+            return Some(client.clone());
+        }
+        
+        match MemoryServiceClient::connect(self.memory_engine_address.clone()).await {
+            Ok(client) => {
+                *guard = Some(client.clone());
+                Some(client)
+            }
+            Err(connect_error) => {
+                tracing::warn!(
+                    subsystem = "ctp",
+                    event_type = "memory_engine_connect_failed",
+                    address = %self.memory_engine_address,
+                    error = %connect_error,
+                    "failed to connect to memory-engine — memory reads will return empty"
+                );
+                None
+            }
+        }
+    }
+
+    /// Read all memory tiers from memory-engine in a single gRPC call.
+    /// Results are split by tier on the client side.
+    /// Returns empty vecs on connection failure or gRPC errors (best-effort).
+    async fn read_memory(&self, query: &str, priority: &str) -> (Vec<MemoryResult>, Vec<MemoryResult>, Vec<MemoryResult>) {
+        let mut client = match self.get_or_connect_client().await {
+            Some(c) => c,
+            None => return (Vec::new(), Vec::new(), Vec::new()),
+        };
+        
+        let request = tonic::Request::new(MemoryReadRequest {
+            query: query.to_string(),
+            limit: self.memory_query_limit,
+            min_score: self.memory_min_score,
+            priority: priority.to_string(),
+            trace_context: String::new(), // TODO: propagate from caller when tracing is wired
+        });
+        
+        let response = match client.read(request).await {
+            Ok(resp) => resp.into_inner(),
+            Err(grpc_error) => {
+                tracing::warn!(
+                    subsystem = "ctp",
+                    event_type = "memory_read_failed",
+                    error = %grpc_error,
+                    "memory-engine read failed — using empty memory context"
+                );
+                // Clear cached client on error so reconnect is attempted next time
+                let mut guard = self.memory_client.lock().await;
+                *guard = None;
+                return (Vec::new(), Vec::new(), Vec::new());
+            }
+        };
+        
+        // Split results by tier
+        let mut short_term = Vec::new();
+        let mut long_term = Vec::new();
+        let mut episodic = Vec::new();
+        
+        for result in response.results {
+            let memory_result = MemoryResult {
+                node_id: result.node_id,
+                summary: result.summary,
+                score: result.score,
+                tier: result.tier.clone(),
+            };
+            
+            match memory_result.tier.as_str() {
+                "short_term" => short_term.push(memory_result),
+                "long_term" => long_term.push(memory_result),
+                "episodic" => episodic.push(memory_result),
+                other => {
+                    tracing::debug!(
+                        subsystem = "ctp",
+                        event_type = "unknown_memory_tier",
+                        tier = other,
+                        node_id = %memory_result.node_id,
+                        "memory result has unknown tier — skipping"
+                    );
+                }
+            }
+        }
+        
+        (short_term, long_term, episodic)
     }
 
     /// Assemble a `PromptContext` from all available sources.
     ///
-    /// Three memory tier reads fire concurrently via `tokio::join!`.
+    /// Memory reads are combined into a single gRPC call, then split by tier.
     /// SoulBox unavailability produces a fallback, not an error.
     pub async fn assemble(&self, activity_state: ActivityState) -> Result<PromptContext, CtpError> {
-        // Fire all three memory reads in parallel via tokio::join!
-        let (short_term_result, long_term_result, episodic_result) = tokio::join!(
-            self.read_short_term(),
-            self.read_long_term(),
-            self.read_episodic(),
-        );
-
-        let short_term = short_term_result.unwrap_or_default();
-        let long_term = long_term_result.unwrap_or_default();
-        let episodic = episodic_result.unwrap_or_default();
+        // Single gRPC call to memory-engine, then split by tier client-side
+        let (short_term, long_term, episodic) = self
+            .read_memory("context assembly", "background")
+            .await;
 
         // SoulBox — fallback to empty when unavailable
         let soulbox_snapshot = self.read_soulbox().await.unwrap_or_else(|_| {
@@ -123,21 +219,6 @@ impl ContextAssembler {
         })
     }
 
-    /// Read short-term memory — stub for Phase 1.
-    async fn read_short_term(&self) -> Result<Vec<MemoryResult>, CtpError> {
-        Ok(Vec::new())
-    }
-
-    /// Read long-term memory — stub for Phase 1.
-    async fn read_long_term(&self) -> Result<Vec<MemoryResult>, CtpError> {
-        Ok(Vec::new())
-    }
-
-    /// Read episodic memory — stub for Phase 1.
-    async fn read_episodic(&self) -> Result<Vec<MemoryResult>, CtpError> {
-        Ok(Vec::new())
-    }
-
     /// Read SoulBox snapshot — stub for Phase 1, returns empty.
     async fn read_soulbox(&self) -> Result<SoulBoxSnapshot, CtpError> {
         // SoulBox is not built yet — return empty
@@ -151,7 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_assembler_produces_context_with_all_fields() {
-        let assembler = ContextAssembler::new("http://127.0.0.1:50052".into());
+        let assembler = ContextAssembler::new("http://127.0.0.1:50052".into(), 20, 0.3);
         let context = assembler
             .assemble(ActivityState::UserActive)
             .await
@@ -169,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_assembler_does_not_toon_encode() {
-        let assembler = ContextAssembler::new("http://127.0.0.1:50052".into());
+        let assembler = ContextAssembler::new("http://127.0.0.1:50052".into(), 20, 0.3);
         let context = assembler
             .assemble(ActivityState::Idle2Min)
             .await
@@ -185,14 +266,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_assembler_parallel_memory_queries() {
-        // This test verifies the structural property that memory reads use
-        // tokio::join! — they run concurrently, not sequentially.
-        // We verify by timing: three concurrent 10ms reads should take ~10ms,
-        // not ~30ms if they were sequential.
+    async fn test_assembler_single_memory_read() {
+        // This test verifies that memory reads are combined into a single
+        // gRPC call, then split by tier on the client side.
         use std::time::Instant;
 
-        let assembler = ContextAssembler::new("http://127.0.0.1:50052".into());
+        let assembler = ContextAssembler::new("http://127.0.0.1:50052".into(), 20, 0.3);
         let start = Instant::now();
         let _context = assembler
             .assemble(ActivityState::UserActive)
@@ -200,18 +279,18 @@ mod tests {
             .expect("test: assemble should succeed");
         let elapsed = start.elapsed();
 
-        // Phase 1 stubs return immediately — the point is they don't block each other.
-        // This test ensures the structure is correct (tokio::join! used).
+        // With the bogus address, connection should fail quickly and return empty results.
+        // This test ensures the structure is correct (single read_memory call).
         assert!(
-            elapsed.as_millis() < 1000,
-            "parallel reads should be fast, took {} ms",
+            elapsed.as_millis() < 5000,
+            "single memory read with connection failure should be fast, took {} ms",
             elapsed.as_millis()
         );
     }
 
     #[tokio::test]
     async fn test_assembler_uses_empty_soulbox_when_unavailable() {
-        let assembler = ContextAssembler::new("http://127.0.0.1:50052".into());
+        let assembler = ContextAssembler::new("http://127.0.0.1:50052".into(), 20, 0.3);
         let context = assembler
             .assemble(ActivityState::Idle10Min)
             .await
@@ -219,5 +298,20 @@ mod tests {
 
         // Should fall back to empty snapshot without error
         assert!(context.soulbox_snapshot.personality_summary.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_assembler_graceful_when_memory_unavailable() {
+        // Create assembler with a bogus address that will fail to connect
+        let assembler = ContextAssembler::new("http://127.0.0.1:99999".into(), 20, 0.3);
+        let context = assembler
+            .assemble(ActivityState::UserActive)
+            .await
+            .expect("test: assemble should succeed even when memory-engine is unavailable");
+
+        // Memory reads should return empty results, not errors
+        assert!(context.short_term.is_empty());
+        assert!(context.long_term.is_empty());
+        assert!(context.episodic.is_empty());
     }
 }

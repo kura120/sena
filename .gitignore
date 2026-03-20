@@ -84,3 +84,6 @@ plans/
 # Sena runtime data
 ~/.sena/
 **/logs/
+
+# Build artifacts
+*.touch

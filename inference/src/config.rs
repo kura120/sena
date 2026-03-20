@@ -32,6 +32,18 @@ pub struct RuntimeConfig {
     pub request_queue_max_depth: usize,
     pub request_timeout_ms: u64,
     pub oom_retry_gpu_layer_divisor: u32,
+    #[serde(default = "default_stream_channel_capacity")]
+    pub stream_channel_capacity: usize,
+    #[serde(default = "default_swap_drain_timeout_ms")]
+    pub swap_drain_timeout_ms: u64,
+}
+
+fn default_stream_channel_capacity() -> usize {
+    32
+}
+
+fn default_swap_drain_timeout_ms() -> u64 {
+    5000
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,10 +58,9 @@ impl Config {
             reason: format!("failed to read config file: {}", e),
         })?;
 
-        let config: Config =
-            toml::from_str(&content).map_err(|e| InferenceError::ConfigLoad {
-                reason: format!("failed to parse TOML: {}", e),
-            })?;
+        let config: Config = toml::from_str(&content).map_err(|e| InferenceError::ConfigLoad {
+            reason: format!("failed to parse TOML: {}", e),
+        })?;
 
         // Validate configuration
         if config.model.vram_budget_mb == 0 {

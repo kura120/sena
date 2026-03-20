@@ -17,6 +17,7 @@ pub struct ModelHandle {
     pub(crate) model: Arc<LlamaModel>,
     pub(crate) backend: Arc<LlamaBackend>,
     pub(crate) model_id: String,
+    pub(crate) context_length: u32,
 }
 
 // SAFETY: LlamaModel and LlamaBackend are thread-safe behind Arc.
@@ -41,10 +42,10 @@ pub fn estimate_vram_mb(model_path: &Path) -> Result<u32, InferenceError> {
 
     let size_bytes = metadata.len();
     let size_mb = size_bytes / (1024 * 1024);
-    
+
     // Apply 1.2x multiplier for overhead (context, KV cache, etc.)
     let estimated_vram_mb = ((size_mb as f64) * 1.2) as u32;
-    
+
     Ok(estimated_vram_mb)
 }
 
@@ -55,6 +56,7 @@ pub fn estimate_vram_mb(model_path: &Path) -> Result<u32, InferenceError> {
 /// * `model_id` - Identifier for this model instance
 /// * `model_path` - Filesystem path to the .gguf model file
 /// * `gpu_layers` - Number of layers to offload to GPU
+/// * `context_length` - Context window size in tokens
 /// * `backend` - Shared LlamaBackend instance
 ///
 /// # Errors
@@ -64,6 +66,7 @@ pub async fn load(
     model_id: &str,
     model_path: &Path,
     gpu_layers: u32,
+    context_length: u32,
     backend: Arc<LlamaBackend>,
 ) -> Result<ModelHandle, InferenceError> {
     let model_id = model_id.to_string();
@@ -71,7 +74,7 @@ pub async fn load(
 
     let handle = tokio::task::spawn_blocking(move || {
         let params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
-        
+
         let model = LlamaModel::load_from_file(&backend, &model_path, &params).map_err(|err| {
             InferenceError::ModelLoad {
                 model_id: model_id.clone(),
@@ -83,6 +86,7 @@ pub async fn load(
             model: Arc::new(model),
             backend,
             model_id,
+            context_length,
         })
     })
     .await?;
@@ -130,10 +134,7 @@ mod tests {
 
         let result = estimate_vram_mb(temp.path());
         let vram = result.expect("test: should succeed for existing file");
-        assert!(
-            vram > 0,
-            "VRAM estimate should be non-zero for a 10MB file"
-        );
+        assert!(vram > 0, "VRAM estimate should be non-zero for a 10MB file");
     }
 
     #[test]

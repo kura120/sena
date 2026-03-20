@@ -5,6 +5,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub grpc: GrpcConfig,
+    pub memory: MemoryConfig,
     pub surface_thresholds: SurfaceThresholds,
     pub expiry_windows: ExpiryWindows,
     pub default_weights: DefaultWeights,
@@ -13,6 +14,12 @@ pub struct Config {
     pub queue: QueueConfig,
     pub activity: ActivityConfig,
     pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MemoryConfig {
+    pub query_limit: u32,
+    pub min_score: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -210,6 +217,10 @@ mod tests {
 daemon_bus_address = "http://127.0.0.1:50051"
 memory_engine_address = "http://127.0.0.1:50052"
 connection_timeout_ms = 5000
+
+[memory]
+query_limit = 20
+min_score = 0.3
 
 [surface_thresholds]
 user_active = 0.9

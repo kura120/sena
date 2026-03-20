@@ -9,10 +9,7 @@ pub enum InferenceError {
     ModelLoad { model_id: String, reason: String },
 
     #[error("insufficient VRAM: required {required_mb} MB, available {available_mb} MB")]
-    InsufficientVram {
-        required_mb: u32,
-        available_mb: u32,
-    },
+    InsufficientVram { required_mb: u32, available_mb: u32 },
 
     #[error("request queue full (max depth: {max_depth})")]
     RequestQueueFull { max_depth: usize },
@@ -48,9 +45,7 @@ pub enum InferenceError {
 impl From<InferenceError> for tonic::Status {
     fn from(error: InferenceError) -> Self {
         match error {
-            InferenceError::ModelNotFound { .. } => {
-                tonic::Status::not_found(error.to_string())
-            }
+            InferenceError::ModelNotFound { .. } => tonic::Status::not_found(error.to_string()),
             InferenceError::ModelLoad { .. } => tonic::Status::internal(error.to_string()),
             InferenceError::InsufficientVram { .. } => {
                 tonic::Status::resource_exhausted(error.to_string())
@@ -65,9 +60,7 @@ impl From<InferenceError> for tonic::Status {
                 tonic::Status::unavailable(error.to_string())
             }
             InferenceError::ModelSwitching => tonic::Status::unavailable(error.to_string()),
-            InferenceError::InferenceExecution { .. } => {
-                tonic::Status::internal(error.to_string())
-            }
+            InferenceError::InferenceExecution { .. } => tonic::Status::internal(error.to_string()),
             InferenceError::SpawnBlocking(_) => tonic::Status::internal(error.to_string()),
             InferenceError::ConfigLoad { .. } => tonic::Status::internal(error.to_string()),
             InferenceError::ConfigValidation { .. } => tonic::Status::internal(error.to_string()),

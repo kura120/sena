@@ -311,6 +311,10 @@ mod tests {
                 memory_engine_address: "http://127.0.0.1:50052".into(),
                 connection_timeout_ms: 5000,
             },
+            memory: MemoryConfig {
+                query_limit: 20,
+                min_score: 0.3,
+            },
             surface_thresholds: SurfaceThresholds {
                 user_active: 0.9,
                 idle_2min: 0.6,

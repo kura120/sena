@@ -39,10 +39,9 @@ use std::time::Duration;
 use crate::config::Config;
 use crate::error::InferenceError;
 use crate::generated::sena_daemonbus_v1::{
-    boot_service_client::BootServiceClient,
-    event_bus_service_client::EventBusServiceClient,
-    inference_service_server::InferenceServiceServer,
-    BootSignal, BootSignalRequest, EventTopic, SubscribeRequest,
+    boot_service_client::BootServiceClient, event_bus_service_client::EventBusServiceClient,
+    inference_service_server::InferenceServiceServer, BootSignal, BootSignalRequest, EventTopic,
+    SubscribeRequest,
 };
 use crate::grpc::InferenceGrpcService;
 use crate::inference_engine::InferenceEngine;
@@ -99,7 +98,8 @@ async fn async_main() -> i32 {
     let boot_client_result = tokio::time::timeout(
         connect_timeout,
         BootServiceClient::connect(daemon_bus_address.clone()),
-    ).await;
+    )
+    .await;
 
     let mut boot_client = match boot_client_result {
         Ok(Ok(client)) => client,
@@ -171,7 +171,10 @@ async fn async_main() -> i32 {
     let model_id = config.model.model_id.clone();
     let model_path = config.model.model_path.clone();
 
-    match engine.load_model(&model_id, &model_path, Arc::clone(&llama_backend)).await {
+    match engine
+        .load_model_with_oom_retry(&model_id, &model_path, Arc::clone(&llama_backend))
+        .await
+    {
         Ok(()) => {
             tracing::info!(
                 subsystem = SUBSYSTEM_ID,
@@ -179,6 +182,21 @@ async fn async_main() -> i32 {
                 model_id = %model_id,
                 "model loaded successfully"
             );
+        }
+        Err(InferenceError::InsufficientVram {
+            required_mb,
+            available_mb,
+        }) => {
+            tracing::error!(
+                subsystem = SUBSYSTEM_ID,
+                event_type = "model_load_degraded",
+                model_id = %model_id,
+                required_vram_mb = required_mb,
+                available_vram_mb = available_mb,
+                "model load failed after OOM retry — signaling INFERENCE_DEGRADED"
+            );
+            best_effort_signal(&mut boot_client, BootSignal::InferenceDegraded).await;
+            return 1;
         }
         Err(load_error) => {
             tracing::error!(
@@ -291,6 +309,158 @@ async fn async_main() -> i32 {
             // daemon-bus detects via boot timeout.
         }
     }
+
+    // ── Model Switching Event Subscription ──────────────────────────────
+    // Spawn a task to subscribe to TOPIC_INFERENCE_MODEL_SWITCHING events
+    // and trigger model hot-swap when requested
+    #[derive(serde::Deserialize)]
+    struct ModelSwitchPayload {
+        model_id: String,
+        model_path: String,
+    }
+
+    let event_engine = Arc::clone(&engine);
+    let event_backend = Arc::clone(&llama_backend);
+    let event_daemon_bus_address = daemon_bus_address.clone();
+
+    tokio::spawn(async move {
+        // Create a new BootServiceClient for this task
+        let mut event_boot_client = match BootServiceClient::connect(event_daemon_bus_address.clone()).await {
+            Ok(client) => client,
+            Err(connect_error) => {
+                tracing::error!(
+                    subsystem = SUBSYSTEM_ID,
+                    event_type = "event_boot_client_connect_failed",
+                    error = %connect_error,
+                    "failed to connect boot client for model switching events"
+                );
+                return;
+            }
+        };
+
+        // Create EventBusServiceClient
+        let mut event_client = match EventBusServiceClient::connect(event_daemon_bus_address).await {
+            Ok(client) => client,
+            Err(connect_error) => {
+                tracing::error!(
+                    subsystem = SUBSYSTEM_ID,
+                    event_type = "event_bus_connect_failed",
+                    error = %connect_error,
+                    "failed to connect to daemon-bus event bus for model switching"
+                );
+                return;
+            }
+        };
+
+        // Subscribe to TOPIC_INFERENCE_MODEL_SWITCHING
+        let subscribe_request = tonic::Request::new(SubscribeRequest {
+            topics: vec![EventTopic::TopicInferenceModelSwitching.into()],
+            subscriber_id: SUBSYSTEM_ID.to_owned(),
+        });
+
+        let mut event_stream = match event_client.subscribe(subscribe_request).await {
+            Ok(response) => response.into_inner(),
+            Err(subscribe_error) => {
+                tracing::error!(
+                    subsystem = SUBSYSTEM_ID,
+                    event_type = "event_subscribe_failed",
+                    error = %subscribe_error,
+                    "failed to subscribe to TOPIC_INFERENCE_MODEL_SWITCHING"
+                );
+                return;
+            }
+        };
+
+        tracing::info!(
+            subsystem = SUBSYSTEM_ID,
+            event_type = "model_switching_subscription_active",
+            "subscribed to TOPIC_INFERENCE_MODEL_SWITCHING"
+        );
+
+        // Process events as they arrive
+        loop {
+            match event_stream.message().await {
+                Ok(Some(bus_event)) => {
+                    tracing::debug!(
+                        subsystem = SUBSYSTEM_ID,
+                        event_type = "model_switching_event_received",
+                        event_id = %bus_event.event_id,
+                        "received model switching event"
+                    );
+
+                    // Parse the payload as JSON
+                    let payload = match serde_json::from_slice::<ModelSwitchPayload>(&bus_event.payload) {
+                        Ok(p) => p,
+                        Err(parse_error) => {
+                            tracing::error!(
+                                subsystem = SUBSYSTEM_ID,
+                                event_type = "model_switch_payload_parse_failed",
+                                event_id = %bus_event.event_id,
+                                error = %parse_error,
+                                "failed to parse model switch payload"
+                            );
+                            continue;
+                        }
+                    };
+
+                    // Call swap_model
+                    tracing::info!(
+                        subsystem = SUBSYSTEM_ID,
+                        event_type = "model_swap_requested",
+                        model_id = %payload.model_id,
+                        model_path = %payload.model_path,
+                        "initiating model swap"
+                    );
+
+                    let swap_result = event_engine
+                        .swap_model(
+                            &payload.model_id,
+                            &payload.model_path,
+                            Arc::clone(&event_backend),
+                            &mut event_boot_client,
+                        )
+                        .await;
+
+                    match swap_result {
+                        Ok(()) => {
+                            tracing::info!(
+                                subsystem = SUBSYSTEM_ID,
+                                event_type = "model_swap_success",
+                                model_id = %payload.model_id,
+                                "model swap completed successfully"
+                            );
+                        }
+                        Err(swap_error) => {
+                            tracing::error!(
+                                subsystem = SUBSYSTEM_ID,
+                                event_type = "model_swap_error",
+                                model_id = %payload.model_id,
+                                error = %swap_error,
+                                "model swap failed"
+                            );
+                        }
+                    }
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        subsystem = SUBSYSTEM_ID,
+                        event_type = "event_stream_ended",
+                        "model switching event stream ended"
+                    );
+                    break;
+                }
+                Err(stream_error) => {
+                    tracing::error!(
+                        subsystem = SUBSYSTEM_ID,
+                        event_type = "event_stream_error",
+                        error = %stream_error,
+                        "error reading model switching event stream"
+                    );
+                    break;
+                }
+            }
+        }
+    });
 
     // ── Step 10: Await shutdown ─────────────────────────────────────────
     tracing::info!(
@@ -451,8 +621,8 @@ async fn best_effort_signal(
 fn initialize_tracing(logging_config: &config::LoggingConfig) {
     use tracing_subscriber::EnvFilter;
 
-    let env_filter = EnvFilter::try_new(&logging_config.level)
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter =
+        EnvFilter::try_new(&logging_config.level).unwrap_or_else(|_| EnvFilter::new("info"));
 
     match logging_config.format.as_str() {
         "json" => {
@@ -498,7 +668,8 @@ mod tests {
 
         let gate_task = tokio::spawn(async move {
             // This simulates waiting for DAEMON_BUS_READY
-            rx.await.expect("test: gate sender should not drop before sending")
+            rx.await
+                .expect("test: gate sender should not drop before sending")
         });
 
         // Gate should not be resolved yet

@@ -1,8 +1,8 @@
+use crate::error::InferenceError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use crate::error::InferenceError;
 
 /// Load state for a model in the registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,12 +74,13 @@ impl ModelRegistry {
         state: ModelLoadState,
     ) -> Result<(), InferenceError> {
         let mut guard = self.inner.write().await;
-        let entry = guard
-            .models
-            .get_mut(model_id)
-            .ok_or_else(|| InferenceError::ModelNotFound {
-                model_id: model_id.to_string(),
-            })?;
+        let entry =
+            guard
+                .models
+                .get_mut(model_id)
+                .ok_or_else(|| InferenceError::ModelNotFound {
+                    model_id: model_id.to_string(),
+                })?;
         entry.state = state;
         Ok(())
     }
@@ -138,7 +139,7 @@ impl ModelRegistry {
             .filter(|entry| {
                 matches!(
                     entry.state,
-                    ModelLoadState::Ready | ModelLoadState::Loading
+                    ModelLoadState::Ready | ModelLoadState::Loading | ModelLoadState::Switching
                 )
             })
             .map(|entry| entry.vram_estimate_mb)
@@ -148,13 +149,30 @@ impl ModelRegistry {
     /// Update the `last_used` timestamp for a model. Returns `ModelNotFound` if the model is not registered.
     pub async fn touch(&self, model_id: &str) -> Result<(), InferenceError> {
         let mut guard = self.inner.write().await;
-        let entry = guard
-            .models
-            .get_mut(model_id)
-            .ok_or_else(|| InferenceError::ModelNotFound {
-                model_id: model_id.to_string(),
-            })?;
+        let entry =
+            guard
+                .models
+                .get_mut(model_id)
+                .ok_or_else(|| InferenceError::ModelNotFound {
+                    model_id: model_id.to_string(),
+                })?;
         entry.last_used = Instant::now();
+        Ok(())
+    }
+
+    /// Remove a model entry from the registry entirely.
+    /// Frees its VRAM budget allocation and clears active_model_id if this was the active model.
+    pub async fn remove(&self, model_id: &str) -> Result<(), InferenceError> {
+        let mut guard = self.inner.write().await;
+        if guard.models.remove(model_id).is_none() {
+            return Err(InferenceError::ModelNotFound {
+                model_id: model_id.to_string(),
+            });
+        }
+        // If this was the active model, clear active_model_id
+        if guard.active_model_id.as_deref() == Some(model_id) {
+            guard.active_model_id = None;
+        }
         Ok(())
     }
 }
@@ -265,10 +283,7 @@ mod tests {
         registry.touch("new").await.expect("test: touch");
 
         // Set "new" as active — LRU should return "old" (not active, least recently used)
-        registry
-            .set_active("new")
-            .await
-            .expect("test: set active");
+        registry.set_active("new").await.expect("test: set active");
 
         let candidate = registry.lru_eviction_candidate().await;
         assert_eq!(candidate, Some("old".to_string()));
@@ -303,5 +318,63 @@ mod tests {
             .expect("test: set");
 
         assert_eq!(registry.total_vram_allocated_mb().await, 3072);
+    }
+
+    #[tokio::test]
+    async fn test_remove_model() {
+        let registry = ModelRegistry::new();
+        registry
+            .register("model-a".into(), "/path/a.gguf".into(), 2048)
+            .await
+            .expect("test: register should succeed");
+
+        // Verify it exists
+        let state = registry
+            .get_state("model-a")
+            .await
+            .expect("test: get_state should succeed");
+        assert_eq!(state, ModelLoadState::Unloaded);
+
+        // Remove it
+        registry
+            .remove("model-a")
+            .await
+            .expect("test: remove should succeed");
+
+        // Verify it's gone
+        let result = registry.get_state("model-a").await;
+        assert!(result.is_err(), "Expected ModelNotFound after removal");
+        match result.expect_err("test: should be error") {
+            InferenceError::ModelNotFound { model_id } => assert_eq!(model_id, "model-a"),
+            other => panic!("Expected ModelNotFound, got: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_clears_active() {
+        let registry = ModelRegistry::new();
+        registry
+            .register("active-model".into(), "/path/active.gguf".into(), 1024)
+            .await
+            .expect("test: register should succeed");
+
+        // Set as active
+        registry
+            .set_active("active-model")
+            .await
+            .expect("test: set_active should succeed");
+        assert_eq!(
+            registry.active_model_id().await,
+            Some("active-model".to_string())
+        );
+
+        // Remove it
+        registry
+            .remove("active-model")
+            .await
+            .expect("test: remove should succeed");
+
+        // Verify active_model_id is cleared
+        assert_eq!(registry.active_model_id().await, None);
     }
 }

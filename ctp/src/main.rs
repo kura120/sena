@@ -173,11 +173,12 @@ async fn async_main() -> i32 {
     // ── Step 7: Initialize ThoughtQueue ─────────────────────────────────
     let thought_queue = Arc::new(ThoughtQueue::new());
 
-    // ── Step 8: Initialize ContextAssembler (with memory-engine address) ─
-    // Actual gRPC client connection to memory-engine is deferred to when
-    // the context assembler first needs to query. For Phase 1, memory reads
-    // return empty results (memory-engine may not be running).
-    let _memory_address = memory_address;
+    // ── Step 8: Initialize ContextAssembler ─────────────────────────────
+    let _context_assembler = Arc::new(context_assembler::ContextAssembler::new(
+        memory_address,
+        config.memory.query_limit,
+        config.memory.min_score,
+    ));
 
     // ── Step 9: Spawn three pipelines ───────────────────────────────────
     let (generation_handle, evaluation_handle, consolidation_handle, _telemetry_tx) = spawn_all(
