@@ -59,6 +59,34 @@ pub async fn start_grpc_server(
         .with_debug_context(format!("addr_str = '{}'", addr_str))
     })?;
 
+    // Pre-bind check: attempt a non-blocking TCP connection to the target port.
+    // If connection succeeds, another process is already listening — fail fast
+    // with a clear, actionable error rather than an opaque "address already in
+    // use" OS error from bind().
+    //
+    // We connect to the loopback address unconditionally because daemon-bus is
+    // always a single-instance local process; there is never a legitimate reason
+    // for port 50051 to be occupied by something else on startup.
+    let probe_addr = format!("127.0.0.1:{}", grpc_config.bind_port);
+    if tokio::net::TcpStream::connect(&probe_addr).await.is_ok() {
+        tracing::error!(
+            subsystem = "daemon_bus",
+            event_type = "port_already_in_use",
+            port = grpc_config.bind_port,
+            "FATAL: port {} is already in use — a previous daemon-bus instance or \
+             one of its child processes (memory-engine, inference, ctp) is still \
+             running. Kill all Sena processes before starting a new instance.",
+            grpc_config.bind_port,
+        );
+        return Err(SenaError::new(
+            ErrorCode::GrpcServerFailed,
+            format!(
+                "port {} is already in use — kill existing daemon-bus instance before starting a new one",
+                grpc_config.bind_port
+            ),
+        ));
+    }
+
     // Bind the TCP socket before spawning the task. After this await the OS
     // has reserved the port — child subsystems can connect as soon as we
     // return from start_grpc_server, with no observable window where the
@@ -66,7 +94,10 @@ pub async fn start_grpc_server(
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|bind_err| {
         SenaError::new(
             ErrorCode::GrpcServerFailed,
-            format!("failed to bind gRPC server to {}: {}", addr, bind_err),
+            format!(
+                "failed to bind gRPC server to {} — a previous instance may still be running: {}",
+                addr, bind_err
+            ),
         )
         .with_debug_context(format!("addr_str = '{}'", addr_str))
     })?;
