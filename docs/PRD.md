@@ -112,21 +112,24 @@ Every subsystem signals daemon-bus when it is truly ready — not just started. 
             → LORA_READY | LORA_SKIPPED
 6.  prompt-composer starts                → waits: MEMORY_ENGINE_READY
             → PROMPT_COMPOSER_READY
-7.  soulbox starts                        → waits: DAEMON_BUS_READY
+7.  reactive-loop starts                  → waits: PROMPT_COMPOSER_READY
+              + INFERENCE_READY
+            → REACTIVE_LOOP_READY
+8.  soulbox starts                        → waits: DAEMON_BUS_READY
             → SOULBOX_READY
-8.  ctp starts                            → waits: MEMORY_ENGINE_READY
+9.  ctp starts                            → waits: MEMORY_ENGINE_READY
               + MODEL_PROFILE_READY
               + LORA_READY | LORA_SKIPPED
             → CTP_READY
-9.  agents starts                         → waits: INFERENCE_READY
+10. agents starts                         → waits: INFERENCE_READY
               + MEMORY_ENGINE_READY
               + CTP_READY
               + SOULBOX_READY
             → AGENTS_READY
-10. platform starts                       → waits: DAEMON_BUS_READY
+11. platform starts                       → waits: DAEMON_BUS_READY
             → PLATFORM_READY
-11. [ SENA_READY ] ← emitted by daemon-bus when all required signals received
-12. sena-ui spawns (on user activation)   → waits: SENA_READY → UI_READY
+12. [ SENA_READY ] ← emitted by daemon-bus when all required signals received
+13. sena-ui spawns (on user activation)   → waits: SENA_READY → UI_READY
 ```
 
 ### 3.3 Multi-Agent System (MAS)
@@ -252,8 +255,10 @@ declares a `model_id`. inference loads models on demand subject to VRAM budget e
 On Mid and High tiers: multiple models loaded simultaneously, LRU eviction when VRAM budget
 is exceeded. Eviction is logged and visible in the debug UI.
 
-**Ollama:** may be used as a GGUF download manager only. Sena never calls Ollama's runtime
-API. GGUF files downloaded via Ollama are passed to inference by file path.
+**Ollama:** Ollama is not a runtime dependency and is never called at runtime. Users who have
+Ollama installed may use it to download GGUF model files — those files are then passed to
+`inference` by file path. The `inference` subsystem loads GGUF files directly via llama-cpp-rs.
+No Ollama API endpoint is ever contacted during Sena operation.
 
 ### 6.2 Inference — Model Ownership and Serving
 
@@ -1238,7 +1243,7 @@ Never use `threading.Thread` directly in lora-manager. Always use asyncio primit
 | Core engine, inference, hot paths | Rust | daemon-bus, inference, memory-engine, model-probe, CTP, prompt-composer, SoulBox, agents |
 | LoRA training | Python | lora-manager — no Rust alternative at parity for LoRA fine-tuning |
 | Architectural index | Python + Rust | codebase-context — Python for build-time index generation, Rust for runtime status updates |
-| UI | Freya (Rust) | Skia-rendered, native GPU, no webview, React-like component model |
+| UI | Tauri v2 (Rust backend + React/TypeScript frontend) | Tauri Rust backend (`src-tauri/`) owns all gRPC client logic and IPC commands; React/TypeScript frontend handles rendering via WebView2 on Windows. No business logic in the frontend. |
 | Windows OS hooks | C#/.NET | WinRT/Win32 system integration |
 | macOS OS hooks (V3) | Swift | AppKit / CoreServices |
 | Linux OS hooks (V3) | Rust | D-Bus / X11 / Wayland |
@@ -1254,11 +1259,12 @@ daemon-bus (Rust)                   ← root process, never restarted externally
 ├── model-probe (Rust)              ← boot-time only, exits after MODEL_PROFILE_READY
 ├── ctp (Rust)                      ← continuous thought loop, CtpService gRPC
 ├── prompt-composer (Rust)          ← TOON + context assembly, PcService gRPC
+├── reactive-loop (Rust)            ← user message handling, agent dispatch, Priority Tier 1
 ├── soulbox (Rust)                  ← encryption, identity, SoulBoxService gRPC
 ├── agents (Rust)                   ← custom framework, 9 built-in agents, AgentService gRPC
 ├── lora-manager (Python)           ← only Python process, LoRA training lifecycle
 ├── codebase-context (Python+Rust)  ← build-time index + runtime status
-├── sena-ui (Freya/Rust)            ← spawned only on user activation
+├── sena-ui (Tauri v2)              ← spawned only on user activation, WebView2 + React frontend
 └── platform/windows (C#)          ← OS hooks, WinRT/Win32
 ```
 
@@ -1291,6 +1297,7 @@ sena/
 ├── model-probe/        # Rust — runtime model capability detection
 ├── ctp/                # Rust — continuous thought processing
 ├── prompt-composer/    # Rust — prompt assembly, TOON encoding
+├── reactive-loop/      # Rust — user message handling, priority tier 1 response loop
 ├── soulbox/            # Rust — encryption, identity, schema, migrations
 ├── agents/             # Rust — custom framework + 9 built-in agents
 │   ├── src/
@@ -1308,9 +1315,15 @@ sena/
 │   │   │   └── reflection/
 │   │   └── reasoning/
 ├── sena-agent-sdk/     # Rust OSS crate — public Agent trait + types for community agents ← new
+├── docs/
+│   ├── PRD.md
+│   └── decisions/      # Architectural Decision Records
 ├── lora-manager/       # Python — LoRA training, versioning, quality gating
 ├── codebase-context/   # Python+Rust — architectural self-awareness
-├── ui/                 # Freya — all UI components
+├── ui/                 # Tauri v2 — React/TypeScript frontend + Rust backend
+│   ├── src-tauri/      # Rust backend — Tauri commands, gRPC client, event emitters
+│   ├── src/            # React/TypeScript frontend components
+│   └── package.json
 └── platform/
   ├── windows/        # C#/.NET — WinRT/Win32 (V1)
   ├── macos/          # Swift — AppKit/CoreServices (V3)
@@ -1335,6 +1348,8 @@ sena/
 | lora-manager | Python | Yes | Idle-time LoRA adapter training, versioning, quality gating, deployment |
 | codebase-context | Python + Rust | Yes | Build-time architectural index + runtime subsystem status |
 | ech0 | Rust | Yes | Local-first knowledge graph memory crate. Standalone OSS. Hybrid redb + usearch, A-MEM, contradiction detection, importance decay, provenance |
+| reactive-loop | Rust | Yes | User message handling, prompt orchestration, agent dispatch. Priority Tier 1 — always beats background traffic. |
+| sena-ui | Tauri v2 (Rust + TypeScript) | No | Tauri Rust backend owns gRPC client and IPC commands; React/TypeScript frontend handles all rendering. Spawned on user activation. |
 
 
 ### 13.5 Agent Framework
@@ -1415,6 +1430,16 @@ All `.proto` definitions live in `daemon-bus/proto/`. Every change to a proto fi
 CI runs `buf breaking` against the last released proto snapshot on every PR that touches `daemon-bus/proto/`. A PR that introduces a breaking change without a version bump fails CI. No exceptions.
 
 **Proto versioning tool:** `buf` — added to the CI pipeline and developer toolchain.
+
+---
+
+### 13.11 Architectural Decision Log
+
+Detailed Architectural Decision Records (ADRs) live in `docs/decisions/`. Each record captures the context, decision, consequences, and subsystems affected for a significant architectural choice. The table below summarises decisions made to date; the linked files contain the full rationale.
+
+| Decision | File | Summary |
+|---|---|---|
+| Migrate UI from Freya to Tauri v2 | `docs/decisions/ui-tauri-migration.md` | Freya lacks native overlay, click-through transparency, system tray, and multi-window support required for the Xbox Game Bar–style debug overlay. Replaced with Tauri v2: Rust backend (`src-tauri/`) preserves all gRPC logic; React/TypeScript frontend handles rendering via WebView2. |
 
 ---
 

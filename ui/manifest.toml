@@ -1,4 +1,0 @@
-name = "ui"
-language = "freya"
-responsibility = "All visual rendering — debug panel, future chat interface, ambient overlay"
-capability_flags = ["UI_READY"]

@@ -8,6 +8,8 @@
 #
 # This keeps the template visible to everyone while local evolutions stay private.
 
+node_modules
+
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

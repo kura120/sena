@@ -1,0 +1,28 @@
+[package]
+name = "sena-ui"
+version = "0.1.0"
+edition = "2021"
+description = "Sena debug overlay — Tauri v2 app"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+tonic-build = "0.12"
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-store = "2"
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+image = "0.25"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

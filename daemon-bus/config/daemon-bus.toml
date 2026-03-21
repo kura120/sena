@@ -67,7 +67,7 @@ depends_on = ["INFERENCE_READY"]
 
 [boot.subsystems.prompt_composer]
 signal = "PROMPT_COMPOSER_READY"
-timeout_ms = 5000
+timeout_ms = 60000
 required = true
 depends_on = ["MEMORY_ENGINE_READY"]
 
@@ -79,7 +79,7 @@ depends_on = ["MEMORY_ENGINE_READY", "MODEL_PROFILE_READY"]
 
 [boot.subsystems.reactive_loop]
 signal = "REACTIVE_LOOP_READY"
-timeout_ms = 5000
+timeout_ms = 60000
 required = true
 depends_on = ["PROMPT_COMPOSER_READY", "INFERENCE_READY"]
 
@@ -137,13 +137,13 @@ working_directory = "inference"
 subsystem_id = "prompt_composer"
 command = "prompt-composer"
 args = []
-working_directory = "../prompt-composer"
+working_directory = "prompt-composer"
 
 [supervisor.subsystems.reactive_loop]
 subsystem_id = "reactive_loop"
 command = "reactive-loop"
 args = []
-working_directory = "../reactive-loop"
+working_directory = "reactive-loop"
 
 [supervisor.subsystems.agents]
 subsystem_id = "agents"
@@ -165,7 +165,11 @@ working_directory = "ctp"
 
 [supervisor.subsystems.ui]
 subsystem_id = "ui"
-command = "target/debug/ui.exe"
+# Tauri binary is compiled into the workspace target directory regardless of
+# whether the build is invoked from ui/ (pnpm tauri build) or from the workspace
+# root (cargo build -p sena-ui). The working_directory is set to "ui" so that
+# Tauri's asset resolution (WebviewUrl::App) finds the dist/ folder correctly.
+command = "../target/debug/sena-ui.exe"
 args = []
 working_directory = "ui"
 spawn_at_boot = false

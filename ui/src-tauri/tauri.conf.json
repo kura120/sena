@@ -1,0 +1,36 @@
+{
+  "productName": "sena-ui",
+  "version": "0.1.0",
+  "identifier": "com.sena.debug-overlay",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "host",
+        "visible": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": false,
+        "decorations": false,
+        "transparent": true,
+        "width": 1,
+        "height": 1,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  },
+  "plugins": {}
+}

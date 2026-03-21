@@ -8,7 +8,7 @@ members = [
     "ctp",
     "prompt-composer",
     "reactive-loop",
-    "ui",
+    "ui/src-tauri",
 ]
 
 [patch.crates-io]

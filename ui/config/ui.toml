@@ -25,3 +25,31 @@ steady_state_delay_ms = 30000
 [logging]
 level = "info"
 format = "json"
+
+[overlay]
+enabled = true
+toggle_key = "Insert"
+
+[overlay.health_window]
+x = 100.0
+y = 100.0
+width = 320.0
+height = 400.0
+
+[overlay.event_bus_window]
+x = 440.0
+y = 100.0
+width = 500.0
+height = 450.0
+
+[overlay.chat_window]
+x = 960.0
+y = 100.0
+width = 400.0
+height = 500.0
+
+[overlay.boot_timeline_window]
+x = 100.0
+y = 520.0
+width = 500.0
+height = 300.0
