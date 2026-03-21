@@ -1,41 +1,55 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum PcError {
-    #[error("config error: {0}")]
-    Config(String),
+pub enum PromptComposerError {
+    #[error("budget exhausted: sacred tokens {sacred_tokens} exceed budget {budget}")]
+    BudgetExhausted { sacred_tokens: u32, budget: u32 },
 
-    #[error("TOON encoding failed: {0}")]
-    ToonEncodingFailed(String),
+    #[error("encoding failed: {reason}")]
+    EncodingFailed { reason: String },
 
-    #[error("TOON encoding produced invalid output")]
-    ToonEncodingInvalid,
+    #[error("config load failed: {reason}")]
+    ConfigLoad { reason: String },
 
-    #[error("sacred content overflow: required {required_tokens} tokens, budget {budget} tokens")]
-    SacredContentOverflow { required_tokens: u32, budget: u32 },
+    #[error("config validation failed: {field}: {reason}")]
+    ConfigValidation { field: String, reason: String },
 
-    #[error("token budget exceeded")]
-    BudgetExceeded,
+    #[error("daemon-bus connection failed: {reason}")]
+    DaemonBusConnection { reason: String },
 
-    #[error("gRPC transport error: {0}")]
-    GrpcTransport(#[from] tonic::transport::Error),
+    #[error("gRPC error: {0}")]
+    Grpc(String),
 
-    #[error("spawn_blocking failed: {0}")]
-    SpawnBlocking(String),
+    #[error("missing required field: {field}")]
+    MissingField { field: String },
+
+    #[error("invalid model profile: {reason}")]
+    InvalidModelProfile { reason: String },
 }
 
-impl From<PcError> for tonic::Status {
-    fn from(error: PcError) -> Self {
+impl From<PromptComposerError> for tonic::Status {
+    fn from(error: PromptComposerError) -> Self {
         match error {
-            PcError::Config(_) => tonic::Status::internal(error.to_string()),
-            PcError::ToonEncodingFailed(_) => tonic::Status::internal(error.to_string()),
-            PcError::ToonEncodingInvalid => tonic::Status::internal(error.to_string()),
-            PcError::SacredContentOverflow { .. } => {
+            PromptComposerError::BudgetExhausted { .. } => {
                 tonic::Status::resource_exhausted(error.to_string())
             }
-            PcError::BudgetExceeded => tonic::Status::resource_exhausted(error.to_string()),
-            PcError::GrpcTransport(_) => tonic::Status::unavailable(error.to_string()),
-            PcError::SpawnBlocking(_) => tonic::Status::internal(error.to_string()),
+            PromptComposerError::EncodingFailed { .. } => {
+                tonic::Status::internal(error.to_string())
+            }
+            PromptComposerError::ConfigLoad { .. } => tonic::Status::internal(error.to_string()),
+            PromptComposerError::ConfigValidation { .. } => {
+                tonic::Status::internal(error.to_string())
+            }
+            PromptComposerError::DaemonBusConnection { .. } => {
+                tonic::Status::unavailable(error.to_string())
+            }
+            PromptComposerError::Grpc(_) => tonic::Status::internal(error.to_string()),
+            PromptComposerError::MissingField { .. } => {
+                tonic::Status::invalid_argument(error.to_string())
+            }
+            PromptComposerError::InvalidModelProfile { .. } => {
+                tonic::Status::invalid_argument(error.to_string())
+            }
         }
     }
 }
@@ -45,26 +59,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_sacred_overflow_to_status() {
-        let error = PcError::SacredContentOverflow {
-            required_tokens: 5000,
-            budget: 4000,
+    fn test_error_to_status_budget_exhausted() {
+        let error = PromptComposerError::BudgetExhausted {
+            sacred_tokens: 5000,
+            budget: 4096,
         };
         let status = tonic::Status::from(error);
         assert_eq!(status.code(), tonic::Code::ResourceExhausted);
     }
 
     #[test]
-    fn test_error_toon_invalid_to_status() {
-        let error = PcError::ToonEncodingInvalid;
+    fn test_error_to_status_missing_field() {
+        let error = PromptComposerError::MissingField {
+            field: "model_profile".into(),
+        };
         let status = tonic::Status::from(error);
-        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
     }
 
     #[test]
-    fn test_error_budget_exceeded_to_status() {
-        let error = PcError::BudgetExceeded;
+    fn test_error_to_status_daemon_bus_connection() {
+        let error = PromptComposerError::DaemonBusConnection {
+            reason: "connection refused".into(),
+        };
         let status = tonic::Status::from(error);
-        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+        assert_eq!(status.code(), tonic::Code::Unavailable);
     }
 }

@@ -1,13 +1,13 @@
-syntax = "proto3";
+﻿syntax = "proto3";
 
 package sena.daemonbus.v1;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Boot Signals
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// Every subsystem signals daemon-bus when it is truly ready — not just started.
-// The boot sequence is ordered per PRD §3.2. daemon-bus tracks each signal and
+// Every subsystem signals daemon-bus when it is truly ready â€” not just started.
+// The boot sequence is ordered per PRD Â§3.2. daemon-bus tracks each signal and
 // halts boot if a required subsystem fails within its configured timeout.
 
 enum BootSignal {
@@ -32,6 +32,7 @@ enum BootSignal {
   SOULBOX_READY = 15;          // Schema loaded and encryption verified.
   // Prompt-composer signals.
   PROMPT_COMPOSER_READY = 16;  // TOON encoder and context budget manager ready.
+  REACTIVE_LOOP_READY = 17;
 }
 
 message BootSignalRequest {
@@ -57,16 +58,16 @@ message BootStatusResponse {
 service BootService {
   // Called by each subsystem when it is truly ready.
   rpc SignalReady(BootSignalRequest) returns (BootSignalResponse);
-  // Query current boot status — useful for UI and diagnostics.
+  // Query current boot status â€” useful for UI and diagnostics.
   rpc GetBootStatus(BootStatusRequest) returns (BootStatusResponse);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Event Bus
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Topic constants are defined here so generated code produces typed constants.
-// All topic strings in Rust reference these — never string literals.
+// All topic strings in Rust reference these â€” never string literals.
 
 enum EventTopic {
   EVENT_TOPIC_UNSPECIFIED = 0;
@@ -127,7 +128,7 @@ message BusEvent {
   EventTopic topic = 2;
   // Source subsystem that emitted the event.
   string source_subsystem = 3;
-  // Arbitrary payload — subsystem-specific, encoded as bytes.
+  // Arbitrary payload â€” subsystem-specific, encoded as bytes.
   // Receivers deserialize based on topic contract.
   bytes payload = 4;
   // OpenTelemetry trace context propagated with every cross-subsystem event.
@@ -154,21 +155,21 @@ message SubscribeRequest {
 service EventBusService {
   // Publish an event to the bus. Fire-and-forget from the caller's perspective.
   rpc Publish(PublishRequest) returns (PublishResponse);
-  // Subscribe to events. Server-streaming — daemon-bus pushes matching events.
+  // Subscribe to events. Server-streaming â€” daemon-bus pushes matching events.
   rpc Subscribe(SubscribeRequest) returns (stream BusEvent);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Priority Arbitration
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 enum PriorityTier {
   PRIORITY_TIER_UNSPECIFIED = 0;
-  CRITICAL = 1; // Tier 0 — daemon-bus only
-  REACTIVE = 2; // Tier 1 — user-facing requests
-  ESCALATED = 3; // Tier 2 — time-bounded, exclusive
-  STANDARD = 4; // Tier 3 — normal agent operation
-  BACKGROUND = 5; // Tier 4 — CTP default, telemetry
+  CRITICAL = 1; // Tier 0 â€” daemon-bus only
+  REACTIVE = 2; // Tier 1 â€” user-facing requests
+  ESCALATED = 3; // Tier 2 â€” time-bounded, exclusive
+  STANDARD = 4; // Tier 3 â€” normal agent operation
+  BACKGROUND = 5; // Tier 4 â€” CTP default, telemetry
 }
 
 enum EscalationResult {
@@ -183,10 +184,10 @@ message EscalationRequest {
   string subsystem_id = 1;
   // The tier being requested. Only ESCALATED (Tier 2) can be requested.
   PriorityTier requested_tier = 2;
-  // Why escalation is needed — logged for debugging and CTP pattern analysis.
+  // Why escalation is needed â€” logged for debugging and CTP pattern analysis.
   string reason = 3;
   // Maximum duration in milliseconds the subsystem expects to need escalation.
-  // daemon-bus enforces a ceiling from config — this is a hint, not a guarantee.
+  // daemon-bus enforces a ceiling from config â€” this is a hint, not a guarantee.
   uint64 requested_duration_ms = 4;
   // Trace context for the operation driving this escalation.
   string trace_context = 5;
@@ -194,7 +195,7 @@ message EscalationRequest {
 
 message EscalationResponse {
   EscalationResult result = 1;
-  // Unique escalation ID — used to release or track expiry.
+  // Unique escalation ID â€” used to release or track expiry.
   string escalation_id = 2;
   // Actual granted duration in milliseconds. May be less than requested.
   uint64 granted_duration_ms = 3;
@@ -224,13 +225,13 @@ service ArbitrationService {
   rpc RequestEscalation(EscalationRequest) returns (EscalationResponse);
   // Voluntarily release an escalation before expiry.
   rpc ReleaseEscalation(ReleaseEscalationRequest) returns (ReleaseEscalationResponse);
-  // Query current arbitration state — for diagnostics.
+  // Query current arbitration state â€” for diagnostics.
   rpc GetArbitrationStatus(ArbitrationStatusRequest) returns (ArbitrationStatusResponse);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Process Supervision
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 enum SubsystemState {
   SUBSYSTEM_STATE_UNSPECIFIED = 0;
@@ -248,7 +249,7 @@ message SubsystemStatus {
   SubsystemState state = 2;
   // Number of restart attempts since last successful start.
   uint32 restart_count = 3;
-  // Last error message if state is DEGRADED or FAILED. Safe for cross-process — no debug_context.
+  // Last error message if state is DEGRADED or FAILED. Safe for cross-process â€” no debug_context.
   string last_error = 4;
   // Process ID if running.
   uint64 pid = 5;
@@ -262,7 +263,7 @@ message SupervisorStatusResponse {
 
 message RestartSubsystemRequest {
   string subsystem_id = 1;
-  // Reason for manual restart — logged.
+  // Reason for manual restart â€” logged.
   string reason = 2;
 }
 
@@ -278,9 +279,9 @@ service SupervisorService {
   rpc RestartSubsystem(RestartSubsystemRequest) returns (RestartSubsystemResponse);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Watchdog
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 message RegisterTaskRequest {
   // Unique task identifier.
@@ -319,15 +320,15 @@ service WatchdogService {
   rpc RegisterTask(RegisterTaskRequest) returns (RegisterTaskResponse);
   // Signal task completion. Cancels the timeout timer.
   rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
-  // Query watchdog state — for diagnostics.
+  // Query watchdog state â€” for diagnostics.
   rpc GetWatchdogStatus(WatchdogStatusRequest) returns (WatchdogStatusResponse);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // MemoryService
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// ── MemoryService messages ────────────────────────────────────────────────
+// â”€â”€ MemoryService messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 message MemoryWriteRequest {
   string text = 1;
@@ -376,12 +377,12 @@ service MemoryService {
   rpc Promote(MemoryPromoteRequest) returns (MemoryPromoteResponse);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Structured Error — Cross-Process Safe
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Structured Error â€” Cross-Process Safe
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // This mirrors the Rust SenaError but only carries fields safe for cross-process
-// propagation. debug_context is never included — it stays local to the originating subsystem.
+// propagation. debug_context is never included â€” it stays local to the originating subsystem.
 
 message SenaErrorProto {
   // Machine-readable error code.
@@ -390,15 +391,15 @@ message SenaErrorProto {
   string message = 2;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // InferenceService
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // InferenceService is the single owner of llama-cpp-rs. Every subsystem that
-// needs completions is a gRPC client to this service — never direct library
+// needs completions is a gRPC client to this service â€” never direct library
 // calls. model-probe, CTP, and the reactive loop all route through here.
 
-// ── InferenceService messages ─────────────────────────────────────────────
+// â”€â”€ InferenceService messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 message CompleteRequest {
   // Fully assembled TOON-encoded prompt from prompt-composer.
@@ -435,14 +436,14 @@ message StreamCompleteChunk {
   string request_id = 3;
 }
 
-// Phase 2 stub — message defined now; implementation deferred.
+// Phase 2 stub â€” message defined now; implementation deferred.
 message ActivationRequest {
   // Which transformer layer to read activations from.
   uint32 layer = 1;
   string request_id = 2;
 }
 
-// Phase 2 stub — message defined now; implementation deferred.
+// Phase 2 stub â€” message defined now; implementation deferred.
 message ActivationResponse {
   uint32 layer = 1;
   // Activation vector at the requested layer.
@@ -450,7 +451,7 @@ message ActivationResponse {
   string request_id = 3;
 }
 
-// Phase 3 stub — message defined now; implementation deferred.
+// Phase 3 stub â€” message defined now; implementation deferred.
 message SteeringRequest {
   // Which transformer layer to apply the steering vector at.
   uint32 layer = 1;
@@ -461,7 +462,7 @@ message SteeringRequest {
   string request_id = 4;
 }
 
-// Phase 3 stub — message defined now; implementation deferred.
+// Phase 3 stub â€” message defined now; implementation deferred.
 message SteeringAck {
   bool applied = 1;
   string request_id = 2;
@@ -472,21 +473,28 @@ service InferenceService {
   rpc Complete(CompleteRequest) returns (CompleteResponse);
   // Run a streamed completion. Server pushes one chunk per token.
   rpc StreamComplete(CompleteRequest) returns (stream StreamCompleteChunk);
-  // Read transformer layer activations. Phase 2 — stub only; not yet implemented.
+  // Read transformer layer activations. Phase 2 â€” stub only; not yet implemented.
   rpc ReadActivations(ActivationRequest) returns (ActivationResponse);
-  // Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
+  // Apply a steering vector during generation. Phase 3 â€” stub only; not yet implemented.
   rpc Steer(SteeringRequest) returns (SteeringAck);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PcService — Prompt Composer
+// PromptComposerService
 // ─────────────────────────────────────────────────────────────────────────────
 
-// PcService is prompt-composer's gRPC interface. CTP sends assembled
-// PromptContext; PC encodes it (TOON or JSON via ESU), enforces the sacred
-// content floor, trims to the model's context budget, and returns the final
-// prompt string ready for InferenceService.
+// prompt-composer sits between CTP and inference. It receives a PromptContext,
+// applies TOON encoding via ESU, enforces sacred content rules, manages the
+// context window budget, and returns the assembled prompt string.
 
+message PromptContextEntry {
+  string id = 1;
+  string content = 2;
+  float relevance_score = 3;
+  string tier = 4;  // "short_term" | "long_term" | "episodic"
+}
+
+// PcService — Prompt Composer (dev branch types, kept for compatibility)
 message PromptContextProto {
   string soulbox_snapshot_json = 1;
   repeated PcMemoryEntry short_term = 2;
@@ -511,7 +519,7 @@ message PcMemoryEntry {
 message TelemetrySignal {
   string signal_type = 1;
   string value = 2;
-  float relevance = 3;
+  float relevance_score = 3;
 }
 
 message AssembleRequest {
@@ -530,4 +538,81 @@ message AssembleResponse {
 
 service PcService {
   rpc Assemble(AssembleRequest) returns (AssembleResponse);
+}
+
+message ModelProfile {
+  string model_id = 1;
+  uint32 context_window = 2;
+  uint32 output_reserve = 3;
+}
+
+message PromptContext {
+  // Sacred content — never dropped regardless of context window pressure.
+  string soulbox_snapshot = 1;
+  string user_intent = 2;
+  // User message for this turn.
+  string user_message = 3;
+  // Memory tiers.
+  repeated PromptContextEntry short_term = 4;
+  repeated PromptContextEntry long_term = 5;
+  repeated PromptContextEntry episodic = 6;
+  // OS context and telemetry.
+  string os_context = 7;
+  repeated TelemetrySignal telemetry_signals = 8;
+  // Model capability profile — drives context window budget.
+  ModelProfile model_profile = 9;
+  // Trace context for cross-subsystem correlation.
+  string trace_context = 10;
+}
+
+message AssemblePromptRequest {
+  PromptContext context = 1;
+  string request_id = 2;
+}
+
+message PromptAssemblyTrace {
+  uint32 token_count = 1;
+  uint32 token_budget = 2;
+  repeated string included_tiers = 3;
+  repeated string dropped_tiers = 4;
+  string encoding_used = 5;
+}
+
+message AssemblePromptResponse {
+  string assembled_prompt = 1;
+  PromptAssemblyTrace assembly_trace = 2;
+  string request_id = 3;
+}
+
+service PromptComposerService {
+  // Assemble a fully encoded prompt from the provided context.
+  rpc AssemblePrompt(AssemblePromptRequest) returns (AssemblePromptResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UserMessageService
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The reactive loop exposes this service for user-facing message handling.
+// The UI and any external clients send messages here. The reactive loop
+// orchestrates the full flow: event publish → context → prompt → inference → response.
+
+message UserMessageRequest {
+  string message = 1;
+  string trace_context = 2;
+}
+
+message UserMessageResponse {
+  string response = 1;
+  string model_id = 2;
+  uint32 tokens_generated = 3;
+  uint32 tokens_prompt = 4;
+  uint64 latency_ms = 5;
+  string request_id = 6;
+  PromptAssemblyTrace assembly_trace = 7;
+}
+
+service UserMessageService {
+  // Send a user message and receive Sena's response.
+  rpc SendMessage(UserMessageRequest) returns (UserMessageResponse);
 }

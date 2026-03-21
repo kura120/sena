@@ -38,7 +38,7 @@ pub struct BusEvent {
     /// Source subsystem that emitted the event.
     #[prost(string, tag = "3")]
     pub source_subsystem: ::prost::alloc::string::String,
-    /// Arbitrary payload — subsystem-specific, encoded as bytes.
+    /// Arbitrary payload â€” subsystem-specific, encoded as bytes.
     /// Receivers deserialize based on topic contract.
     #[prost(bytes = "vec", tag = "4")]
     pub payload: ::prost::alloc::vec::Vec<u8>,
@@ -76,11 +76,11 @@ pub struct EscalationRequest {
     /// The tier being requested. Only ESCALATED (Tier 2) can be requested.
     #[prost(enumeration = "PriorityTier", tag = "2")]
     pub requested_tier: i32,
-    /// Why escalation is needed — logged for debugging and CTP pattern analysis.
+    /// Why escalation is needed â€” logged for debugging and CTP pattern analysis.
     #[prost(string, tag = "3")]
     pub reason: ::prost::alloc::string::String,
     /// Maximum duration in milliseconds the subsystem expects to need escalation.
-    /// daemon-bus enforces a ceiling from config — this is a hint, not a guarantee.
+    /// daemon-bus enforces a ceiling from config â€” this is a hint, not a guarantee.
     #[prost(uint64, tag = "4")]
     pub requested_duration_ms: u64,
     /// Trace context for the operation driving this escalation.
@@ -91,7 +91,7 @@ pub struct EscalationRequest {
 pub struct EscalationResponse {
     #[prost(enumeration = "EscalationResult", tag = "1")]
     pub result: i32,
-    /// Unique escalation ID — used to release or track expiry.
+    /// Unique escalation ID â€” used to release or track expiry.
     #[prost(string, tag = "2")]
     pub escalation_id: ::prost::alloc::string::String,
     /// Actual granted duration in milliseconds. May be less than requested.
@@ -132,7 +132,7 @@ pub struct SubsystemStatus {
     /// Number of restart attempts since last successful start.
     #[prost(uint32, tag = "3")]
     pub restart_count: u32,
-    /// Last error message if state is DEGRADED or FAILED. Safe for cross-process — no debug_context.
+    /// Last error message if state is DEGRADED or FAILED. Safe for cross-process â€” no debug_context.
     #[prost(string, tag = "4")]
     pub last_error: ::prost::alloc::string::String,
     /// Process ID if running.
@@ -150,7 +150,7 @@ pub struct SupervisorStatusResponse {
 pub struct RestartSubsystemRequest {
     #[prost(string, tag = "1")]
     pub subsystem_id: ::prost::alloc::string::String,
-    /// Reason for manual restart — logged.
+    /// Reason for manual restart â€” logged.
     #[prost(string, tag = "2")]
     pub reason: ::prost::alloc::string::String,
 }
@@ -327,7 +327,7 @@ pub struct StreamCompleteChunk {
     #[prost(string, tag = "3")]
     pub request_id: ::prost::alloc::string::String,
 }
-/// Phase 2 stub — message defined now; implementation deferred.
+/// Phase 2 stub â€” message defined now; implementation deferred.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActivationRequest {
     /// Which transformer layer to read activations from.
@@ -336,7 +336,7 @@ pub struct ActivationRequest {
     #[prost(string, tag = "2")]
     pub request_id: ::prost::alloc::string::String,
 }
-/// Phase 2 stub — message defined now; implementation deferred.
+/// Phase 2 stub â€” message defined now; implementation deferred.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActivationResponse {
     #[prost(uint32, tag = "1")]
@@ -347,7 +347,7 @@ pub struct ActivationResponse {
     #[prost(string, tag = "3")]
     pub request_id: ::prost::alloc::string::String,
 }
-/// Phase 3 stub — message defined now; implementation deferred.
+/// Phase 3 stub â€” message defined now; implementation deferred.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SteeringRequest {
     /// Which transformer layer to apply the steering vector at.
@@ -362,7 +362,7 @@ pub struct SteeringRequest {
     #[prost(string, tag = "4")]
     pub request_id: ::prost::alloc::string::String,
 }
-/// Phase 3 stub — message defined now; implementation deferred.
+/// Phase 3 stub â€” message defined now; implementation deferred.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SteeringAck {
     #[prost(bool, tag = "1")]
@@ -370,6 +370,19 @@ pub struct SteeringAck {
     #[prost(string, tag = "2")]
     pub request_id: ::prost::alloc::string::String,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PromptContextEntry {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub content: ::prost::alloc::string::String,
+    #[prost(float, tag = "3")]
+    pub relevance_score: f32,
+    /// "short_term" | "long_term" | "episodic"
+    #[prost(string, tag = "4")]
+    pub tier: ::prost::alloc::string::String,
+}
+/// PcService — Prompt Composer (dev branch types, kept for compatibility)
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PromptContextProto {
     #[prost(string, tag = "1")]
@@ -413,7 +426,7 @@ pub struct TelemetrySignal {
     #[prost(string, tag = "2")]
     pub value: ::prost::alloc::string::String,
     #[prost(float, tag = "3")]
-    pub relevance: f32,
+    pub relevance_score: f32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AssembleRequest {
@@ -436,6 +449,97 @@ pub struct AssembleResponse {
     pub truncated: bool,
     #[prost(string, repeated, tag = "6")]
     pub dropped_tiers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ModelProfile {
+    #[prost(string, tag = "1")]
+    pub model_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub context_window: u32,
+    #[prost(uint32, tag = "3")]
+    pub output_reserve: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PromptContext {
+    /// Sacred content — never dropped regardless of context window pressure.
+    #[prost(string, tag = "1")]
+    pub soulbox_snapshot: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub user_intent: ::prost::alloc::string::String,
+    /// User message for this turn.
+    #[prost(string, tag = "3")]
+    pub user_message: ::prost::alloc::string::String,
+    /// Memory tiers.
+    #[prost(message, repeated, tag = "4")]
+    pub short_term: ::prost::alloc::vec::Vec<PromptContextEntry>,
+    #[prost(message, repeated, tag = "5")]
+    pub long_term: ::prost::alloc::vec::Vec<PromptContextEntry>,
+    #[prost(message, repeated, tag = "6")]
+    pub episodic: ::prost::alloc::vec::Vec<PromptContextEntry>,
+    /// OS context and telemetry.
+    #[prost(string, tag = "7")]
+    pub os_context: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "8")]
+    pub telemetry_signals: ::prost::alloc::vec::Vec<TelemetrySignal>,
+    /// Model capability profile — drives context window budget.
+    #[prost(message, optional, tag = "9")]
+    pub model_profile: ::core::option::Option<ModelProfile>,
+    /// Trace context for cross-subsystem correlation.
+    #[prost(string, tag = "10")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssemblePromptRequest {
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<PromptContext>,
+    #[prost(string, tag = "2")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PromptAssemblyTrace {
+    #[prost(uint32, tag = "1")]
+    pub token_count: u32,
+    #[prost(uint32, tag = "2")]
+    pub token_budget: u32,
+    #[prost(string, repeated, tag = "3")]
+    pub included_tiers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "4")]
+    pub dropped_tiers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "5")]
+    pub encoding_used: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssemblePromptResponse {
+    #[prost(string, tag = "1")]
+    pub assembled_prompt: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub assembly_trace: ::core::option::Option<PromptAssemblyTrace>,
+    #[prost(string, tag = "3")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UserMessageRequest {
+    #[prost(string, tag = "1")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub trace_context: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UserMessageResponse {
+    #[prost(string, tag = "1")]
+    pub response: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub model_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub tokens_generated: u32,
+    #[prost(uint32, tag = "4")]
+    pub tokens_prompt: u32,
+    #[prost(uint64, tag = "5")]
+    pub latency_ms: u64,
+    #[prost(string, tag = "6")]
+    pub request_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "7")]
+    pub assembly_trace: ::core::option::Option<PromptAssemblyTrace>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -467,6 +571,7 @@ pub enum BootSignal {
     ///
     /// TOON encoder and context budget manager ready.
     PromptComposerReady = 16,
+    ReactiveLoopReady = 17,
 }
 impl BootSignal {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -491,6 +596,7 @@ impl BootSignal {
             Self::InferenceDegraded => "INFERENCE_DEGRADED",
             Self::SoulboxReady => "SOULBOX_READY",
             Self::PromptComposerReady => "PROMPT_COMPOSER_READY",
+            Self::ReactiveLoopReady => "REACTIVE_LOOP_READY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -512,6 +618,7 @@ impl BootSignal {
             "INFERENCE_DEGRADED" => Some(Self::InferenceDegraded),
             "SOULBOX_READY" => Some(Self::SoulboxReady),
             "PROMPT_COMPOSER_READY" => Some(Self::PromptComposerReady),
+            "REACTIVE_LOOP_READY" => Some(Self::ReactiveLoopReady),
             _ => None,
         }
     }
@@ -649,15 +756,15 @@ impl EventTopic {
 #[repr(i32)]
 pub enum PriorityTier {
     Unspecified = 0,
-    /// Tier 0 — daemon-bus only
+    /// Tier 0 â€” daemon-bus only
     Critical = 1,
-    /// Tier 1 — user-facing requests
+    /// Tier 1 â€” user-facing requests
     Reactive = 2,
-    /// Tier 2 — time-bounded, exclusive
+    /// Tier 2 â€” time-bounded, exclusive
     Escalated = 3,
-    /// Tier 3 — normal agent operation
+    /// Tier 3 â€” normal agent operation
     Standard = 4,
-    /// Tier 4 — CTP default, telemetry
+    /// Tier 4 â€” CTP default, telemetry
     Background = 5,
 }
 impl PriorityTier {
@@ -880,7 +987,7 @@ pub mod boot_service_client {
                 .insert(GrpcMethod::new("sena.daemonbus.v1.BootService", "SignalReady"));
             self.inner.unary(req, path, codec).await
         }
-        /// Query current boot status — useful for UI and diagnostics.
+        /// Query current boot status â€” useful for UI and diagnostics.
         pub async fn get_boot_status(
             &mut self,
             request: impl tonic::IntoRequest<super::BootStatusRequest>,
@@ -1025,7 +1132,7 @@ pub mod event_bus_service_client {
                 .insert(GrpcMethod::new("sena.daemonbus.v1.EventBusService", "Publish"));
             self.inner.unary(req, path, codec).await
         }
-        /// Subscribe to events. Server-streaming — daemon-bus pushes matching events.
+        /// Subscribe to events. Server-streaming â€” daemon-bus pushes matching events.
         pub async fn subscribe(
             &mut self,
             request: impl tonic::IntoRequest<super::SubscribeRequest>,
@@ -1205,7 +1312,7 @@ pub mod arbitration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Query current arbitration state — for diagnostics.
+        /// Query current arbitration state â€” for diagnostics.
         pub async fn get_arbitration_status(
             &mut self,
             request: impl tonic::IntoRequest<super::ArbitrationStatusRequest>,
@@ -1532,7 +1639,7 @@ pub mod watchdog_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Query watchdog state — for diagnostics.
+        /// Query watchdog state â€” for diagnostics.
         pub async fn get_watchdog_status(
             &mut self,
             request: impl tonic::IntoRequest<super::WatchdogStatusRequest>,
@@ -1877,7 +1984,7 @@ pub mod inference_service_client {
                 );
             self.inner.server_streaming(req, path, codec).await
         }
-        /// Read transformer layer activations. Phase 2 — stub only; not yet implemented.
+        /// Read transformer layer activations. Phase 2 â€” stub only; not yet implemented.
         pub async fn read_activations(
             &mut self,
             request: impl tonic::IntoRequest<super::ActivationRequest>,
@@ -1907,7 +2014,7 @@ pub mod inference_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
+        /// Apply a steering vector during generation. Phase 3 â€” stub only; not yet implemented.
         pub async fn steer(
             &mut self,
             request: impl tonic::IntoRequest<super::SteeringRequest>,
@@ -2044,6 +2151,252 @@ pub mod pc_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("sena.daemonbus.v1.PcService", "Assemble"));
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated client implementations.
+pub mod prompt_composer_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct PromptComposerServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl PromptComposerServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> PromptComposerServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> PromptComposerServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            PromptComposerServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /// Assemble a fully encoded prompt from the provided context.
+        pub async fn assemble_prompt(
+            &mut self,
+            request: impl tonic::IntoRequest<super::AssemblePromptRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AssemblePromptResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.PromptComposerService/AssemblePrompt",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "sena.daemonbus.v1.PromptComposerService",
+                        "AssemblePrompt",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated client implementations.
+pub mod user_message_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct UserMessageServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl UserMessageServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> UserMessageServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> UserMessageServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            UserMessageServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /// Send a user message and receive Sena's response.
+        pub async fn send_message(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UserMessageRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UserMessageResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.UserMessageService/SendMessage",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "sena.daemonbus.v1.UserMessageService",
+                        "SendMessage",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
     }

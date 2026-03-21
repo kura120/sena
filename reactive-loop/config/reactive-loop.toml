@@ -1,0 +1,27 @@
+# reactive-loop configuration
+
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+inference_address = "http://127.0.0.1:50055"
+prompt_composer_address = "http://127.0.0.1:50057"
+listen_address = "0.0.0.0"
+listen_port = 50058
+connection_timeout_ms = 5000
+
+[boot]
+ready_signal_timeout_ms = 5000
+
+[inference]
+default_max_tokens = 1024
+default_temperature = 0.7
+request_timeout_ms = 30000
+
+[fallback]
+# Response returned when inference is unavailable.
+unavailable_response = "I'm currently unable to process your request. The inference engine is not available."
+# Response returned when prompt-composer is unavailable.
+minimal_context_enabled = true
+
+[logging]
+level = "info"
+format = "json"

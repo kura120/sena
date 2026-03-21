@@ -1,44 +1,49 @@
-//! prompt-composer — Sena's dynamic prompt assembly subsystem.
+//! prompt-composer — Sena's prompt assembly subsystem process.
+//!
+//! This is the process entry point. The boot sequence is ordered and any
+//! failure in steps 1–7 is fatal: log the error, signal failure to daemon-bus
+//! (best-effort), and exit with a non-zero code.
 //!
 //! ## Boot Sequence
 //!
 //! 1. Load config from `prompt-composer.toml`
 //! 2. Initialize tracing subscriber
 //! 3. Connect to daemon-bus
-//! 4. Subscribe to boot signals, wait for `MEMORY_ENGINE_READY`
-//! 5. Initialize PcGrpcService
-//! 6. Start gRPC server (PcService)
-//! 7. Signal PROMPT_COMPOSER_READY to daemon-bus
-//! 8. Await shutdown signal
+//! 4. Subscribe to boot signals, wait for `DAEMON_BUS_READY`
+//! 5. Start gRPC server (PromptComposerService)
+//! 6. Signal PROMPT_COMPOSER_READY to daemon-bus
+//! 7. Await shutdown signal
 //!
-//! Any failure in steps 1–6 is fatal: log error, signal failure to daemon-bus
-//! (best-effort), and exit non-zero.
+//! No `println!` or `eprintln!` except for the single pre-tracing fatal path.
 
 pub mod assembler;
 pub mod config;
 pub mod error;
 pub mod esu;
-pub mod generated;
 pub mod grpc;
-pub mod token_counter;
+
+pub mod generated {
+    #[path = "sena.daemonbus.v1.rs"]
+    pub mod sena_daemonbus_v1;
+}
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::error::PromptComposerError;
 use crate::generated::sena_daemonbus_v1::{
     boot_service_client::BootServiceClient,
     event_bus_service_client::EventBusServiceClient,
-    pc_service_server::PcServiceServer,
-    BootSignal, BootSignalRequest, EventTopic, SubscribeRequest,
+    prompt_composer_service_server::PromptComposerServiceServer, BootSignal, BootSignalRequest,
+    EventTopic, SubscribeRequest,
 };
-use crate::grpc::PcGrpcService;
+use crate::grpc::PromptComposerGrpcService;
 
-const SUBSYSTEM_ID: &str = "prompt-composer";
+const SUBSYSTEM_ID: &str = "prompt_composer";
 
 fn main() {
-    // Cannot proceed without an async executor — runtime build failure is truly fatal
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("prompt-composer-worker")
@@ -58,6 +63,7 @@ async fn async_main() -> i32 {
     let config = match Config::load(&config_path) {
         Ok(loaded) => loaded,
         Err(config_error) => {
+            // Cannot use tracing — subscriber not yet initialized.
             eprintln!(
                 "[FATAL] failed to load prompt-composer config from '{}': {}",
                 config_path.display(),
@@ -111,14 +117,15 @@ async fn async_main() -> i32 {
         }
     };
 
-    // ── Step 4: Wait for MEMORY_ENGINE_READY ────────────────────────────
-    match wait_for_memory_engine_ready(&daemon_bus_address, connect_timeout).await {
+    // ── Step 4: Wait for DAEMON_BUS_READY ───────────────────────────────
+    // Subscribe to boot signals and wait until we see DAEMON_BUS_READY.
+    match wait_for_daemon_bus_ready(&daemon_bus_address, connect_timeout).await {
         Ok(()) => {
             tracing::info!(
                 subsystem = SUBSYSTEM_ID,
                 event_type = "boot_signal_received",
-                signal = "MEMORY_ENGINE_READY",
-                "memory-engine is ready"
+                signal = "DAEMON_BUS_READY",
+                "daemon-bus is ready"
             );
         }
         Err(wait_error) => {
@@ -126,36 +133,22 @@ async fn async_main() -> i32 {
                 subsystem = SUBSYSTEM_ID,
                 event_type = "boot_signal_wait_failed",
                 error = %wait_error,
-                "failed to receive MEMORY_ENGINE_READY"
+                "failed to receive DAEMON_BUS_READY"
             );
             return 1;
         }
     }
 
-    // ── Step 5: Initialize PcGrpcService ────────────────────────────────
-    let event_bus_client = match EventBusServiceClient::connect(daemon_bus_address.clone()).await {
-        Ok(client) => client,
-        Err(connect_error) => {
-            tracing::error!(
-                subsystem = SUBSYSTEM_ID,
-                event_type = "event_bus_connect_failed",
-                error = %connect_error,
-                "failed to connect to daemon-bus event bus"
-            );
-            return 1;
-        }
-    };
-
-    let grpc_service = PcGrpcService::new(Arc::clone(&config), event_bus_client);
-
-    // ── Step 6: Start gRPC server ───────────────────────────────────────
+    // ── Step 5: Start gRPC server ───────────────────────────────────────
+    let grpc_service = PromptComposerGrpcService::new(Arc::clone(&config));
     let listen_addr_result: Result<std::net::SocketAddr, _> =
-        format!("0.0.0.0:{}", config.grpc.listen_port)
+        format!("{}:{}", config.grpc.listen_address, config.grpc.listen_port)
             .parse()
             .map_err(|parse_error: std::net::AddrParseError| {
                 tracing::error!(
                     subsystem = SUBSYSTEM_ID,
                     event_type = "invalid_listen_address",
+                    address = %config.grpc.listen_address,
                     port = config.grpc.listen_port,
                     error = %parse_error,
                     "invalid gRPC listen address"
@@ -165,7 +158,11 @@ async fn async_main() -> i32 {
 
     let listen_addr = match listen_addr_result {
         Ok(addr) => addr,
-        Err(_) => return 1,
+        Err(_) => {
+            // Cannot signal unavailable — proto doesn't define PromptComposerUnavailable.
+            // Daemon-bus will detect via boot timeout.
+            return 1;
+        }
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -175,12 +172,14 @@ async fn async_main() -> i32 {
             subsystem = SUBSYSTEM_ID,
             event_type = "grpc_server_starting",
             listen_addr = %listen_addr,
-            "PcService gRPC server starting"
+            "PromptComposerService gRPC server starting"
         );
 
         let serve_result = tonic::transport::Server::builder()
-            .add_service(PcServiceServer::new(grpc_service))
+            .add_service(PromptComposerServiceServer::new(grpc_service))
             .serve_with_shutdown(listen_addr, async {
+                // Completion of the receive (Ok or Err) both mean "shut down".
+                // Ok = explicit signal, Err = sender dropped (also means shutdown).
                 let _shutdown_signal = shutdown_rx.await;
                 tracing::info!(
                     subsystem = SUBSYSTEM_ID,
@@ -200,7 +199,7 @@ async fn async_main() -> i32 {
         }
     });
 
-    // ── Step 7: Signal PROMPT_COMPOSER_READY ─────────────────────────────
+    // ── Step 6: Signal PROMPT_COMPOSER_READY ────────────────────────────
     let ready_request = tonic::Request::new(BootSignalRequest {
         subsystem_id: SUBSYSTEM_ID.to_owned(),
         signal: BootSignal::PromptComposerReady.into(),
@@ -223,10 +222,11 @@ async fn async_main() -> i32 {
                 "failed to signal PROMPT_COMPOSER_READY to daemon-bus"
             );
             // Service is running — log failure but continue.
+            // daemon-bus detects via boot timeout.
         }
     }
 
-    // ── Step 8: Await shutdown ─────────────────────────────────────────
+    // ── Step 7: Await shutdown ──────────────────────────────────────────
     tracing::info!(
         subsystem = SUBSYSTEM_ID,
         event_type = "running",
@@ -258,7 +258,11 @@ async fn async_main() -> i32 {
         "initiating graceful shutdown"
     );
 
-    // Stop gRPC server
+    // Note: Proto doesn't define PromptComposerUnavailable signal.
+    // Daemon-bus detects shutdown via connection close.
+
+    // Stop gRPC server — if the receiver is already dropped the server
+    // already exited, so the send failure is harmless during shutdown.
     let _send_result = shutdown_tx.send(());
 
     // Wait for gRPC server to finish
@@ -286,15 +290,16 @@ async fn async_main() -> i32 {
 // Boot helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Wait for MEMORY_ENGINE_READY by subscribing to the event bus boot signal topic.
-async fn wait_for_memory_engine_ready(
+/// Wait for DAEMON_BUS_READY by subscribing to the event bus boot signal topic.
+async fn wait_for_daemon_bus_ready(
     daemon_bus_address: &str,
     timeout: Duration,
-) -> Result<(), error::PcError> {
-    let mut event_client =
-        EventBusServiceClient::connect(daemon_bus_address.to_owned())
-            .await
-            .map_err(|e| error::PcError::Config(format!("event bus connect failed: {}", e)))?;
+) -> Result<(), PromptComposerError> {
+    let mut event_client = EventBusServiceClient::connect(daemon_bus_address.to_owned())
+        .await
+        .map_err(|e| PromptComposerError::DaemonBusConnection {
+            reason: format!("event bus connect failed: {}", e),
+        })?;
 
     let subscribe_request = tonic::Request::new(SubscribeRequest {
         topics: vec![EventTopic::TopicBootSignal.into()],
@@ -304,27 +309,30 @@ async fn wait_for_memory_engine_ready(
     let mut stream = event_client
         .subscribe(subscribe_request)
         .await
-        .map_err(|e| error::PcError::Config(format!("subscribe failed: {}", e)))?
+        .map_err(|e| PromptComposerError::Grpc(format!("subscribe failed: {}", e)))?
         .into_inner();
 
     let wait_future = async {
         loop {
             match stream.message().await {
                 Ok(Some(bus_event)) => {
-                    if bus_event.topic == i32::from(EventTopic::TopicBootSignal)
-                        && bus_event.source_subsystem == "memory_engine"
-                    {
-                        return Ok(());
+                    // Check if this is the DAEMON_BUS_READY boot signal
+                    if bus_event.topic == i32::from(EventTopic::TopicBootSignal) {
+                        // Parse the signal from the payload or check source
+                        // For now, check if source is daemon_bus
+                        if bus_event.source_subsystem == "daemon_bus" {
+                            return Ok(());
+                        }
                     }
                 }
                 Ok(None) => {
-                    return Err(error::PcError::Config(
-                        "event stream ended before MEMORY_ENGINE_READY".into(),
-                    ));
+                    return Err(PromptComposerError::DaemonBusConnection {
+                        reason: "event stream ended before DAEMON_BUS_READY".into(),
+                    });
                 }
                 Err(stream_error) => {
-                    return Err(error::PcError::Config(format!(
-                        "stream error waiting for MEMORY_ENGINE_READY: {}",
+                    return Err(PromptComposerError::Grpc(format!(
+                        "stream error waiting for DAEMON_BUS_READY: {}",
                         stream_error
                     )));
                 }
@@ -334,8 +342,8 @@ async fn wait_for_memory_engine_ready(
 
     tokio::time::timeout(timeout, wait_future)
         .await
-        .map_err(|_| {
-            error::PcError::Config("timed out waiting for MEMORY_ENGINE_READY".into())
+        .map_err(|_| PromptComposerError::DaemonBusConnection {
+            reason: "timed out waiting for DAEMON_BUS_READY".into(),
         })?
 }
 
@@ -357,7 +365,8 @@ fn initialize_tracing(logging_config: &config::LoggingConfig) {
                 .with_line_number(false)
                 .finish();
 
-            // Tracing subscriber must be set exactly once — duplicate initialization is a bug
+            // This must be called exactly once. Panic is acceptable — duplicate
+            // initialization means a configuration bug that must be caught.
             tracing::subscriber::set_global_default(subscriber)
                 .expect("tracing subscriber must be set exactly once");
         }
@@ -371,7 +380,6 @@ fn initialize_tracing(logging_config: &config::LoggingConfig) {
                 .with_line_number(false)
                 .finish();
 
-            // Tracing subscriber must be set exactly once — duplicate initialization is a bug
             tracing::subscriber::set_global_default(subscriber)
                 .expect("tracing subscriber must be set exactly once");
         }
@@ -383,11 +391,13 @@ mod tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
-    async fn test_boot_gate_waits_for_memory_engine_ready() {
+    async fn test_boot_signal_gate_prevents_early_start() {
         // Verify that a oneshot channel gate blocks until the signal fires.
+        // This tests the boot gate pattern used in async_main.
         let (tx, rx) = oneshot::channel::<()>();
 
         let gate_task = tokio::spawn(async move {
+            // This simulates waiting for DAEMON_BUS_READY
             rx.await
                 .expect("test: gate sender should not drop before sending")
         });
@@ -395,27 +405,36 @@ mod tests {
         // Gate should not be resolved yet
         assert!(!gate_task.is_finished());
 
-        // Send the signal (simulates MEMORY_ENGINE_READY)
-        tx.send(()).expect("test: receiver should still be alive");
+        // Send the signal
+        tx.send(())
+            .expect("test: receiver should still be alive");
 
         // Now the gate should resolve
-        gate_task.await.expect("test: gate task should complete");
+        gate_task
+            .await
+            .expect("test: gate task should complete");
     }
 
     #[tokio::test]
-    async fn test_shutdown_stops_grpc_server() {
+    async fn test_shutdown_signal_channel_works() {
         // Verify the shutdown oneshot channel pattern.
+        // When the sender fires, the receiver resolves.
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let server_task = tokio::spawn(async move {
+            // Simulates serve_with_shutdown waiting
             let _signal = shutdown_rx.await;
             "shutdown_received"
         });
 
         // Send shutdown
-        shutdown_tx.send(()).expect("test: receiver alive");
+        shutdown_tx
+            .send(())
+            .expect("test: receiver alive");
 
-        let result = server_task.await.expect("test: task should complete");
+        let result = server_task
+            .await
+            .expect("test: task should complete");
         assert_eq!(result, "shutdown_received");
     }
 }

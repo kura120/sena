@@ -1,4 +1,4 @@
-use serde::Deserialize;
+﻿use serde::Deserialize;
 use std::path::Path;
 
 /// Top-level configuration for the UI subsystem, loaded from `config/ui.toml`.

@@ -1,591 +1,648 @@
-//! Prompt assembler — the core of prompt-composer.
+//! Core prompt assembly logic.
 //!
-//! Receives a `PromptContext`, runs each sub-piece through the ESU to choose
-//! TOON vs JSON encoding, enforces the sacred content floor (SoulBox snapshot +
-//! user intent are never dropped), trims to the model's context budget using a
-//! fixed priority drop order, validates the final output, and returns the
-//! assembled prompt string.
-//!
-//! Fully stateless — every call is independent. No data persists between calls.
-
-use serde::Serialize;
-use sha2::{Digest, Sha256};
+//! Implements the Fixed Drop Order algorithm, sacred content enforcement,
+//! and token budget management.
 
 use crate::config::Config;
-use crate::error::PcError;
-use crate::esu::{choose_encoding, EsuOptions};
-use crate::token_counter;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// SoulBox personality snapshot — sacred content, never dropped.
-#[derive(Debug, Clone, Serialize)]
-pub struct SoulBoxSnapshot {
-    pub personality_summary: String,
-}
-
-/// OS context — active window and recent events.
-#[derive(Debug, Clone, Serialize)]
-pub struct OsContext {
-    pub active_window: String,
-    pub recent_events: Vec<String>,
-}
-
-/// A memory search result from a specific tier.
-#[derive(Debug, Clone, Serialize)]
-pub struct MemoryResult {
-    pub node_id: String,
-    pub summary: String,
-    pub score: f32,
-    pub tier: String,
-}
-
-/// A telemetry signal for context enrichment.
-#[derive(Debug, Clone, Serialize)]
-pub struct TelemetrySignal {
-    pub signal_type: String,
-    pub value: String,
-    pub relevance: f32,
-}
-
-/// Model capability profile — provides the context window budget.
-#[derive(Debug, Clone)]
-pub struct ModelCapabilityProfile {
-    pub model_id: String,
-    pub context_window: u32,
-    pub output_reserve: u32,
-}
-
-/// Assembled context from CTP — all inputs for prompt assembly.
-#[derive(Debug, Clone)]
-pub struct PromptContext {
-    pub soulbox_snapshot: SoulBoxSnapshot,
-    pub short_term: Vec<MemoryResult>,
-    pub long_term: Vec<MemoryResult>,
-    pub episodic: Vec<MemoryResult>,
-    pub os_context: OsContext,
-    pub model_profile: ModelCapabilityProfile,
-    pub user_intent: Option<String>,
-    pub telemetry_signals: Vec<TelemetrySignal>,
-}
+use crate::error::PromptComposerError;
+use crate::esu::{select_encoding, EncodingChoice};
+use crate::generated::sena_daemonbus_v1::{
+    ModelProfile, PromptAssemblyTrace, PromptContext, PromptContextEntry, TelemetrySignal,
+};
 
 /// Result of prompt assembly.
 #[derive(Debug, Clone)]
-pub struct AssembleResult {
-    /// The final assembled prompt string.
-    pub prompt: String,
-    /// Total token count of the assembled prompt.
-    pub token_count: u32,
-    /// Whether any content was dropped to fit the budget.
-    pub truncated: bool,
-    /// Names of tiers that were dropped (in drop order).
-    pub dropped_tiers: Vec<String>,
-    /// SHA-256 hash of the final prompt — for telemetry, never log raw content.
-    pub unique_hash: String,
-    /// The model ID this prompt was assembled for.
-    pub model_id: String,
+pub struct AssemblyResult {
+    pub assembled_prompt: String,
+    pub trace: PromptAssemblyTrace,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Internal types for assembly
-// ─────────────────────────────────────────────────────────────────────────────
+/// Stateless prompt assembler.
+pub struct PromptAssembler;
 
-/// A prompt part with its tier name and encoded content.
-struct PromptPart {
-    tier: String,
-    encoded: String,
-    tokens: usize,
+impl PromptAssembler {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Assemble a prompt from the given context, respecting token budget and drop order.
+    pub fn assemble(
+        &self,
+        context: &PromptContext,
+        config: &Config,
+    ) -> Result<AssemblyResult, PromptComposerError> {
+        let model_profile = context
+            .model_profile
+            .as_ref()
+            .ok_or_else(|| PromptComposerError::MissingField {
+                field: "model_profile".into(),
+            })?;
+
+        // Validate model profile
+        if model_profile.context_window == 0 {
+            return Err(PromptComposerError::InvalidModelProfile {
+                reason: "context_window must be greater than 0".into(),
+            });
+        }
+
+        // Calculate token budget (context window minus output reserve)
+        let token_budget = model_profile
+            .context_window
+            .saturating_sub(model_profile.output_reserve);
+
+        if token_budget == 0 {
+            return Err(PromptComposerError::InvalidModelProfile {
+                reason: "token budget is zero after subtracting output reserve".into(),
+            });
+        }
+
+        tracing::debug!(
+            subsystem = "prompt_composer",
+            event_type = "assembly_start",
+            context_window = model_profile.context_window,
+            output_reserve = model_profile.output_reserve,
+            token_budget = token_budget,
+            "starting prompt assembly"
+        );
+
+        // Build the prompt following Fixed Drop Order
+        let mut builder = PromptBuilder::new(token_budget, config);
+
+        // Step 1: Add sacred content (always included, never dropped)
+        builder.add_sacred("soulbox_snapshot", &context.soulbox_snapshot)?;
+        builder.add_sacred("user_intent", &context.user_intent)?;
+
+        // Step 2: Add user message (not sacred, but high priority)
+        builder.add_section("user_message", &context.user_message, false);
+
+        // Step 3-7: Add droppable content in reverse drop order (highest priority first)
+        // Drop order (from spec):
+        // 1. Lowest-relevance telemetry signals
+        // 2. Redundant OS context
+        // 3. Stale short-term context
+        // 4. Lowest-relevance long-term memories
+        // 5. Lowest-relevance episodic memories
+
+        // Add in reverse order (episodic first, telemetry last) so that when
+        // budget is exceeded, we can drop in the correct order.
+        builder.add_memory_tier("episodic", &context.episodic, model_profile);
+        builder.add_memory_tier("long_term", &context.long_term, model_profile);
+        builder.add_memory_tier("short_term", &context.short_term, model_profile);
+        builder.add_section("os_context", &context.os_context, false);
+        builder.add_telemetry(&context.telemetry_signals, model_profile);
+
+        // Finalize and build the prompt
+        let result = builder.finalize()?;
+
+        tracing::info!(
+            subsystem = "prompt_composer",
+            event_type = "assembly_complete",
+            token_count = result.trace.token_count,
+            token_budget = result.trace.token_budget,
+            encoding = %result.trace.encoding_used,
+            included_tiers = ?result.trace.included_tiers,
+            dropped_tiers = ?result.trace.dropped_tiers,
+            "prompt assembly complete"
+        );
+
+        Ok(result)
+    }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Assembly
-// ─────────────────────────────────────────────────────────────────────────────
+/// Builder for assembling prompts with token budget tracking.
+struct PromptBuilder<'a> {
+    sections: Vec<PromptSection>,
+    token_budget: u32,
+    current_tokens: u32,
+    config: &'a Config,
+    included_tiers: Vec<String>,
+    dropped_tiers: Vec<String>,
+    encoding_used: EncodingChoice,
+}
 
-/// Assemble a prompt from the given context using the provided configuration.
-///
-/// This is the core function of prompt-composer. It:
-/// 1. Encodes sacred content (SoulBox + user intent) via ESU — always JSON
-/// 2. Checks that sacred content fits within the budget
-/// 3. Encodes each optional tier via ESU (TOON or JSON based on savings)
-/// 4. Drops lowest-priority tiers until total fits within budget
-/// 5. Validates the final prompt
-/// 6. Returns the result with hash (never raw content in telemetry)
-///
-/// TOON encoding is CPU-bound so this function is async — it spawns blocking
-/// tasks for TOON encoding via `tokio::task::spawn_blocking`.
-pub async fn assemble(
-    context: &PromptContext,
-    config: &Config,
-) -> Result<AssembleResult, PcError> {
-    // Per-request output_reserve from model profile takes precedence over config default.
-    let output_reserve = if context.model_profile.output_reserve > 0 {
-        context.model_profile.output_reserve
-    } else {
-        config.budget.output_reserve_tokens
-    };
-    let budget = context
-        .model_profile
-        .context_window
-        .saturating_sub(output_reserve) as usize;
+#[derive(Debug)]
+struct PromptSection {
+    name: String,
+    content: String,
+    is_sacred: bool,
+    priority: usize, // Lower number = higher priority (sacred = 0)
+}
 
-    // ── Encode sacred content (always JSON) ─────────────────────────────
-    let sacred_options = EsuOptions { is_sacred: true };
-
-    let soulbox_result = choose_encoding(
-        &context.soulbox_snapshot,
-        &config.esu,
-        sacred_options.clone(),
-    );
-
-    let mut sacred_parts: Vec<PromptPart> = vec![PromptPart {
-        tier: "soulbox".to_string(),
-        encoded: soulbox_result.encoded,
-        tokens: soulbox_result.json_tokens,
-    }];
-
-    if let Some(ref intent) = context.user_intent {
-        let intent_result = choose_encoding(intent, &config.esu, EsuOptions { is_sacred: true });
-        sacred_parts.push(PromptPart {
-            tier: "user_intent".to_string(),
-            encoded: intent_result.encoded,
-            tokens: intent_result.json_tokens,
-        });
+impl<'a> PromptBuilder<'a> {
+    fn new(token_budget: u32, config: &'a Config) -> Self {
+        Self {
+            sections: Vec::new(),
+            token_budget,
+            current_tokens: 0,
+            config,
+            included_tiers: Vec::new(),
+            dropped_tiers: Vec::new(),
+            encoding_used: EncodingChoice::Json, // Default, will be determined during assembly
+        }
     }
 
-    let sacred_tokens: usize = sacred_parts.iter().map(|p| p.tokens).sum();
+    /// Add sacred content — always included, budget exhaustion is fatal.
+    fn add_sacred(
+        &mut self,
+        name: &str,
+        content: &str,
+    ) -> Result<(), PromptComposerError> {
+        if content.is_empty() {
+            return Ok(());
+        }
 
-    if sacred_tokens > budget {
-        return Err(PcError::SacredContentOverflow {
-            required_tokens: sacred_tokens as u32,
-            budget: budget as u32,
+        // Sacred content always uses JSON encoding for fidelity
+        let (_encoding, encoded) = select_encoding(content, true, &self.config.context_window);
+        let tokens = estimate_tokens(&encoded, &self.config.context_window);
+
+        // Check if sacred content fits in budget
+        if self.current_tokens + tokens > self.token_budget {
+            return Err(PromptComposerError::BudgetExhausted {
+                sacred_tokens: self.current_tokens + tokens,
+                budget: self.token_budget,
+            });
+        }
+
+        self.sections.push(PromptSection {
+            name: name.to_owned(),
+            content: encoded,
+            is_sacred: true,
+            priority: 0, // Highest priority
         });
+
+        self.current_tokens += tokens;
+        self.included_tiers.push(name.to_owned());
+
+        tracing::debug!(
+            subsystem = "prompt_composer",
+            event_type = "section_added",
+            section = name,
+            tokens = tokens,
+            current_tokens = self.current_tokens,
+            is_sacred = true,
+            "added sacred section"
+        );
+
+        Ok(())
     }
 
-    // ── Encode optional tiers ───────────────────────────────────────────
-    // Tiers are encoded in the order specified by config.drop_order.tiers.
-    // The first tier in the list is dropped first when budget is tight.
-    // TOON encoding is CPU-bound, so we use spawn_blocking.
+    /// Add a regular section with encoding selection.
+    fn add_section(&mut self, name: &str, content: &str, is_sacred: bool) {
+        if content.is_empty() {
+            return;
+        }
 
-    let mut optional_parts: Vec<PromptPart> = Vec::new();
+        let (encoding, encoded) = select_encoding(content, is_sacred, &self.config.context_window);
+        let tokens = estimate_tokens(&encoded, &self.config.context_window);
 
-    for tier_name in &config.drop_order.tiers {
-        let part = match tier_name.as_str() {
-            "telemetry" => {
-                if context.telemetry_signals.is_empty() {
-                    continue;
-                }
-                let esu_config = config.esu.clone();
-                let telemetry = context.telemetry_signals.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    choose_encoding(&telemetry, &esu_config, EsuOptions { is_sacred: false })
-                })
-                .await
-                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
+        // Track which encoding was used (bias toward TOON if any section uses it)
+        if encoding == EncodingChoice::Toon {
+            self.encoding_used = EncodingChoice::Toon;
+        }
 
-                let tokens = token_counter::count_tokens(&result.encoded);
-                PromptPart {
-                    tier: "telemetry".to_string(),
-                    encoded: result.encoded,
-                    tokens,
-                }
+        // Only add if we have budget
+        if self.current_tokens + tokens <= self.token_budget {
+            self.sections.push(PromptSection {
+                name: name.to_owned(),
+                content: encoded,
+                is_sacred,
+                priority: 2, // Lower priority than sacred
+            });
+
+            self.current_tokens += tokens;
+            self.included_tiers.push(name.to_owned());
+
+            tracing::debug!(
+                subsystem = "prompt_composer",
+                event_type = "section_added",
+                section = name,
+                tokens = tokens,
+                current_tokens = self.current_tokens,
+                encoding = %encoding.as_str(),
+                "added section"
+            );
+        } else {
+            self.dropped_tiers.push(name.to_owned());
+
+            tracing::debug!(
+                subsystem = "prompt_composer",
+                event_type = "section_dropped",
+                section = name,
+                tokens = tokens,
+                current_tokens = self.current_tokens,
+                reason = "budget_exceeded",
+                "dropped section due to budget"
+            );
+        }
+    }
+
+    /// Add a memory tier (short_term, long_term, episodic) with relevance-based filtering.
+    fn add_memory_tier(
+        &mut self,
+        tier_name: &str,
+        entries: &[PromptContextEntry],
+        _model_profile: &ModelProfile,
+    ) {
+        if entries.is_empty() {
+            return;
+        }
+
+        // Sort by relevance score (highest first)
+        let mut sorted_entries = entries.to_vec();
+        // unwrap acceptable: relevance_score is f32; partial_cmp returns None only for NaN,
+        // which should never occur in valid relevance scores from the context provider.
+        sorted_entries.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap());
+
+        let mut tier_content = Vec::new();
+        let mut tier_tokens = 0u32;
+
+        for entry in sorted_entries {
+            // Encode each entry
+            let entry_json = serde_json::json!({
+                "id": entry.id,
+                "content": entry.content,
+                "relevance": entry.relevance_score,
+                "tier": entry.tier,
+            })
+            .to_string();
+
+            let (_, encoded) = select_encoding(&entry_json, false, &self.config.context_window);
+            let tokens = estimate_tokens(&encoded, &self.config.context_window);
+
+            // Add entry if it fits
+            if self.current_tokens + tier_tokens + tokens <= self.token_budget {
+                tier_content.push(encoded);
+                tier_tokens += tokens;
+            } else {
+                // Budget exceeded — stop adding entries from this tier
+                break;
             }
-            "os_context" => {
-                let esu_config = config.esu.clone();
-                let os_ctx = context.os_context.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    choose_encoding(&os_ctx, &esu_config, EsuOptions { is_sacred: false })
-                })
-                .await
-                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
+        }
 
-                let tokens = token_counter::count_tokens(&result.encoded);
-                PromptPart {
-                    tier: "os_context".to_string(),
-                    encoded: result.encoded,
-                    tokens,
-                }
-            }
-            "short_term" => {
-                if context.short_term.is_empty() {
-                    continue;
-                }
-                let esu_config = config.esu.clone();
-                let short_term = context.short_term.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    choose_encoding(&short_term, &esu_config, EsuOptions { is_sacred: false })
-                })
-                .await
-                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
+        if !tier_content.is_empty() {
+            let content = format!("--- {} ---\n{}", tier_name, tier_content.join("\n"));
+            let section_tokens = estimate_tokens(&content, &self.config.context_window);
 
-                let tokens = token_counter::count_tokens(&result.encoded);
-                PromptPart {
-                    tier: "short_term".to_string(),
-                    encoded: result.encoded,
-                    tokens,
-                }
-            }
-            "long_term" => {
-                if context.long_term.is_empty() {
-                    continue;
-                }
-                let esu_config = config.esu.clone();
-                let long_term = context.long_term.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    choose_encoding(&long_term, &esu_config, EsuOptions { is_sacred: false })
-                })
-                .await
-                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
+            self.sections.push(PromptSection {
+                name: tier_name.to_owned(),
+                content,
+                is_sacred: false,
+                priority: 3,
+            });
 
-                let tokens = token_counter::count_tokens(&result.encoded);
-                PromptPart {
-                    tier: "long_term".to_string(),
-                    encoded: result.encoded,
-                    tokens,
-                }
-            }
-            "episodic" => {
-                if context.episodic.is_empty() {
-                    continue;
-                }
-                let esu_config = config.esu.clone();
-                let episodic = context.episodic.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    choose_encoding(&episodic, &esu_config, EsuOptions { is_sacred: false })
-                })
-                .await
-                .map_err(|e| PcError::SpawnBlocking(e.to_string()))?;
+            self.current_tokens += section_tokens;
+            self.included_tiers.push(tier_name.to_owned());
 
-                let tokens = token_counter::count_tokens(&result.encoded);
-                PromptPart {
-                    tier: "episodic".to_string(),
-                    encoded: result.encoded,
-                    tokens,
-                }
+            tracing::debug!(
+                subsystem = "prompt_composer",
+                event_type = "tier_added",
+                tier = tier_name,
+                entries_included = tier_content.len(),
+                entries_total = entries.len(),
+                tokens = section_tokens,
+                current_tokens = self.current_tokens,
+                "added memory tier"
+            );
+        } else {
+            self.dropped_tiers.push(tier_name.to_owned());
+
+            tracing::debug!(
+                subsystem = "prompt_composer",
+                event_type = "tier_dropped",
+                tier = tier_name,
+                reason = "budget_exceeded",
+                "dropped entire tier due to budget"
+            );
+        }
+    }
+
+    /// Add telemetry signals with relevance-based filtering.
+    fn add_telemetry(&mut self, signals: &[TelemetrySignal], _model_profile: &ModelProfile) {
+        if signals.is_empty() {
+            return;
+        }
+
+        // Sort by relevance score (highest first)
+        let mut sorted_signals = signals.to_vec();
+        // unwrap acceptable: relevance_score is f32; partial_cmp returns None only for NaN,
+        // which should never occur in valid relevance scores from telemetry signals.
+        sorted_signals.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap());
+
+        let mut telemetry_content = Vec::new();
+        let mut telemetry_tokens = 0u32;
+
+        for signal in sorted_signals {
+            let signal_json = serde_json::json!({
+                "type": signal.signal_type,
+                "value": signal.value,
+                "relevance": signal.relevance_score,
+            })
+            .to_string();
+
+            let (_, encoded) = select_encoding(&signal_json, false, &self.config.context_window);
+            let tokens = estimate_tokens(&encoded, &self.config.context_window);
+
+            if self.current_tokens + telemetry_tokens + tokens <= self.token_budget {
+                telemetry_content.push(encoded);
+                telemetry_tokens += tokens;
+            } else {
+                break;
             }
-            _ => continue,
+        }
+
+        if !telemetry_content.is_empty() {
+            let content = format!("--- telemetry ---\n{}", telemetry_content.join("\n"));
+            let section_tokens = estimate_tokens(&content, &self.config.context_window);
+
+            self.sections.push(PromptSection {
+                name: "telemetry".to_owned(),
+                content,
+                is_sacred: false,
+                priority: 5, // Lowest priority
+            });
+
+            self.current_tokens += section_tokens;
+            self.included_tiers.push("telemetry".to_owned());
+
+            tracing::debug!(
+                subsystem = "prompt_composer",
+                event_type = "telemetry_added",
+                signals_included = telemetry_content.len(),
+                signals_total = signals.len(),
+                tokens = section_tokens,
+                current_tokens = self.current_tokens,
+                "added telemetry signals"
+            );
+        } else {
+            self.dropped_tiers.push("telemetry".to_owned());
+        }
+    }
+
+    /// Finalize the prompt assembly.
+    fn finalize(self) -> Result<AssemblyResult, PromptComposerError> {
+        // Sort sections by priority (sacred first, then others)
+        let mut sections = self.sections;
+        sections.sort_by_key(|s| s.priority);
+
+        // Assemble the final prompt
+        let assembled_prompt = sections
+            .iter()
+            .map(|s| {
+                if s.is_sacred {
+                    format!("=== {} ===\n{}\n", s.name, s.content)
+                } else {
+                    format!("{}\n", s.content)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let trace = PromptAssemblyTrace {
+            token_count: self.current_tokens,
+            token_budget: self.token_budget,
+            included_tiers: self.included_tiers,
+            dropped_tiers: self.dropped_tiers,
+            encoding_used: self.encoding_used.as_str().to_owned(),
         };
 
-        optional_parts.push(part);
+        Ok(AssemblyResult {
+            assembled_prompt,
+            trace,
+        })
     }
+}
 
-    // ── Drop lowest-priority tiers until total fits budget ──────────────
-    let mut dropped_tiers: Vec<String> = Vec::new();
-    let mut total_tokens: usize = sacred_tokens + optional_parts.iter().map(|p| p.tokens).sum::<usize>();
-
-    // Drop from front (lowest priority in drop order: telemetry first)
-    while total_tokens > budget && !optional_parts.is_empty() {
-        let dropped = optional_parts.remove(0);
-        total_tokens -= dropped.tokens;
-        dropped_tiers.push(dropped.tier);
-    }
-
-    // ── Build final prompt ──────────────────────────────────────────────
-    let mut prompt_sections: Vec<String> = Vec::new();
-
-    // Sacred content first
-    for part in &sacred_parts {
-        prompt_sections.push(part.encoded.clone());
-    }
-
-    // Optional content in order
-    for part in &optional_parts {
-        prompt_sections.push(part.encoded.clone());
-    }
-
-    let prompt = prompt_sections.join("\n\n");
-
-    // ── Validate ────────────────────────────────────────────────────────
-    if prompt.is_empty() {
-        return Err(PcError::BudgetExceeded);
-    }
-
-    // ── Hash for telemetry ──────────────────────────────────────────────
-    let mut hasher = Sha256::new();
-    hasher.update(prompt.as_bytes());
-    let hash_bytes = hasher.finalize();
-    let unique_hash = format!("{:x}", hash_bytes);
-
-    let final_token_count = token_counter::count_tokens(&prompt);
-
-    Ok(AssembleResult {
-        prompt,
-        token_count: final_token_count as u32,
-        truncated: !dropped_tiers.is_empty(),
-        dropped_tiers,
-        unique_hash,
-        model_id: context.model_profile.model_id.clone(),
-    })
+/// Estimate token count from content using the configured ratio.
+fn estimate_tokens(content: &str, config: &crate::config::ContextWindowConfig) -> u32 {
+    (content.len() as f32 * config.tokens_per_char_estimate).ceil() as u32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        BudgetConfig, Config, DropOrderConfig, EsuConfig, GrpcConfig, LoggingConfig,
-        TelemetryConfig,
-    };
 
     fn test_config() -> Config {
         Config {
-            grpc: GrpcConfig {
-                daemon_bus_address: "http://127.0.0.1:50051".to_string(),
-                listen_port: 50054,
+            grpc: crate::config::GrpcConfig {
+                daemon_bus_address: "http://127.0.0.1:50051".into(),
+                listen_address: "0.0.0.0".into(),
+                listen_port: 50057,
                 connection_timeout_ms: 5000,
             },
-            esu: EsuConfig {
-                save_threshold: 0.15,
-                latency_threshold_ms: 10,
-                sacred_always_json: true,
+            boot: crate::config::BootConfig {
+                ready_signal_timeout_ms: 5000,
             },
-            budget: BudgetConfig {
-                output_reserve_tokens: 100,
-                min_sacred_headroom_pct: 0.1,
+            context_window: crate::config::ContextWindowConfig {
+                esu_savings_threshold: 0.15,
+                tokens_per_char_estimate: 0.25,
             },
-            drop_order: DropOrderConfig {
-                tiers: vec![
-                    "telemetry".into(),
-                    "os_context".into(),
-                    "short_term".into(),
-                    "long_term".into(),
-                    "episodic".into(),
-                ],
+            sacred: crate::config::SacredConfig {
+                sacred_fields: vec!["soulbox_snapshot".into(), "user_intent".into()],
             },
-            telemetry: TelemetryConfig {
-                emit_encoding_choices: true,
-            },
-            logging: LoggingConfig {
+            logging: crate::config::LoggingConfig {
                 level: "info".into(),
                 format: "json".into(),
             },
         }
     }
 
-    fn test_context() -> PromptContext {
-        PromptContext {
-            soulbox_snapshot: SoulBoxSnapshot {
-                personality_summary: "warm and curious".to_string(),
-            },
-            short_term: vec![MemoryResult {
-                node_id: "st1".into(),
-                summary: "recent conversation about weather".into(),
-                score: 0.9,
+    fn test_model_profile(context_window: u32, output_reserve: u32) -> ModelProfile {
+        ModelProfile {
+            model_id: "test-model".into(),
+            context_window,
+            output_reserve,
+        }
+    }
+
+    #[test]
+    fn test_sacred_content_always_included() {
+        let config = test_config();
+        let assembler = PromptAssembler::new();
+
+        let context = PromptContext {
+            soulbox_snapshot: "sacred soul data".into(),
+            user_intent: "sacred intent".into(),
+            user_message: "hello".into(),
+            short_term: vec![],
+            long_term: vec![],
+            episodic: vec![],
+            os_context: String::new(),
+            telemetry_signals: vec![],
+            model_profile: Some(test_model_profile(8192, 1024)),
+            trace_context: String::new(),
+        };
+
+        let result = assembler.assemble(&context, &config).expect("assembly should succeed");
+
+        assert!(result.assembled_prompt.contains("sacred soul data"));
+        assert!(result.assembled_prompt.contains("sacred intent"));
+        assert!(result.trace.included_tiers.contains(&"soulbox_snapshot".to_string()));
+        assert!(result.trace.included_tiers.contains(&"user_intent".to_string()));
+    }
+
+    #[test]
+    fn test_budget_exhausted_by_sacred_content() {
+        let config = test_config();
+        let assembler = PromptAssembler::new();
+
+        // Very small budget that can't fit sacred content
+        let context = PromptContext {
+            soulbox_snapshot: "x".repeat(1000), // ~250 tokens
+            user_intent: "x".repeat(1000),      // ~250 tokens
+            user_message: String::new(),
+            short_term: vec![],
+            long_term: vec![],
+            episodic: vec![],
+            os_context: String::new(),
+            telemetry_signals: vec![],
+            model_profile: Some(test_model_profile(100, 50)), // Budget = 50 tokens
+            trace_context: String::new(),
+        };
+
+        let result = assembler.assemble(&context, &config);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PromptComposerError::BudgetExhausted { .. } => {}
+            other => panic!("Expected BudgetExhausted, got: {}", other),
+        }
+    }
+
+    #[test]
+    fn test_drop_order_respected() {
+        let config = test_config();
+        let assembler = PromptAssembler::new();
+
+        // Create a context with all tiers populated
+        let context = PromptContext {
+            soulbox_snapshot: "soul".into(),
+            user_intent: "intent".into(),
+            user_message: "hello".into(),
+            short_term: vec![PromptContextEntry {
+                id: "st1".into(),
+                content: "short term memory".into(),
+                relevance_score: 0.9,
                 tier: "short_term".into(),
             }],
-            long_term: vec![MemoryResult {
-                node_id: "lt1".into(),
-                summary: "user prefers concise answers".into(),
-                score: 0.7,
+            long_term: vec![PromptContextEntry {
+                id: "lt1".into(),
+                content: "long term memory".into(),
+                relevance_score: 0.8,
                 tier: "long_term".into(),
             }],
-            episodic: vec![],
-            os_context: OsContext {
-                active_window: "Visual Studio Code".into(),
-                recent_events: vec!["file saved".into()],
-            },
-            model_profile: ModelCapabilityProfile {
-                model_id: "test-model".into(),
-                context_window: 4096,
-                output_reserve: 512,
-            },
-            user_intent: Some("help with Rust code".to_string()),
-            telemetry_signals: vec![],
-        }
-    }
+            episodic: vec![PromptContextEntry {
+                id: "ep1".into(),
+                content: "episodic memory".into(),
+                relevance_score: 0.7,
+                tier: "episodic".into(),
+            }],
+            os_context: "Linux 5.15".into(),
+            telemetry_signals: vec![TelemetrySignal {
+                signal_type: "cpu".into(),
+                value: "50%".into(),
+                relevance_score: 0.5,
+            }],
+            model_profile: Some(test_model_profile(500, 100)), // Limited budget
+            trace_context: String::new(),
+        };
 
-    #[tokio::test]
-    async fn test_assemble_produces_nonempty_prompt() {
-        let config = test_config();
-        let context = test_context();
-        let result = assemble(&context, &config).await.expect("should assemble");
-        assert!(!result.prompt.is_empty(), "prompt should not be empty");
-        assert!(result.token_count > 0, "token count should be > 0");
-    }
+        let result = assembler.assemble(&context, &config).expect("assembly should succeed");
 
-    #[tokio::test]
-    async fn test_two_calls_produce_different_prompts() {
-        let config = test_config();
-        let context1 = test_context();
-        let mut context2 = test_context();
-        context2.soulbox_snapshot.personality_summary = "cold and analytical".to_string();
+        // Sacred content should always be included
+        assert!(result.trace.included_tiers.contains(&"soulbox_snapshot".to_string()));
+        assert!(result.trace.included_tiers.contains(&"user_intent".to_string()));
 
-        let result1 = assemble(&context1, &config).await.expect("should assemble");
-        let result2 = assemble(&context2, &config).await.expect("should assemble");
+        // With limited budget, some tiers should be dropped
+        // Telemetry should drop first (lowest priority)
+        if !result.trace.dropped_tiers.is_empty() {
+            // If anything is dropped, telemetry should be among the first
+            let telemetry_dropped = result.trace.dropped_tiers.contains(&"telemetry".to_string());
+            let episodic_included = result.trace.included_tiers.contains(&"episodic".to_string());
 
-        assert_ne!(result1.unique_hash, result2.unique_hash, "different context should produce different hashes");
-    }
-
-    #[tokio::test]
-    async fn test_sacred_content_always_present() {
-        let config = test_config();
-        let context = test_context();
-        let result = assemble(&context, &config).await.expect("should assemble");
-
-        // SoulBox snapshot should be present in the prompt
-        assert!(
-            result.prompt.contains("warm and curious"),
-            "SoulBox snapshot should be in the prompt"
-        );
-        // User intent should be present
-        assert!(
-            result.prompt.contains("help with Rust code"),
-            "user intent should be in the prompt"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_sacred_overflow_returns_error() {
-        let config = test_config();
-        let mut context = test_context();
-        // Set model profile with impossibly high output reserve to leave tiny budget
-        context.model_profile.output_reserve = 4090;
-        // Context window is 4096, reserve is 4090, leaving budget of 6 tokens
-        // Sacred content will definitely overflow 6 tokens
-        let result = assemble(&context, &config).await;
-        assert!(result.is_err(), "should fail when sacred content overflows budget");
-        match result.unwrap_err() {
-            PcError::SacredContentOverflow { .. } => {}
-            other => panic!("expected SacredContentOverflow, got {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_drop_order_respected() {
-        let config = test_config();
-        let mut context = test_context();
-        // Fill up with lots of content to force drops
-        context.telemetry_signals = vec![TelemetrySignal {
-            signal_type: "cpu".into(),
-            value: "high".into(),
-            relevance: 0.5,
-        }];
-        context.short_term = vec![MemoryResult {
-            node_id: "st1".into(),
-            summary: "a".repeat(1000),
-            score: 0.9,
-            tier: "short_term".into(),
-        }];
-        context.long_term = vec![MemoryResult {
-            node_id: "lt1".into(),
-            summary: "b".repeat(1000),
-            score: 0.7,
-            tier: "long_term".into(),
-        }];
-        // Set a tight budget to force drops
-        context.model_profile.context_window = 500;
-        context.model_profile.output_reserve = 100;
-
-        let result = assemble(&context, &config).await.expect("should assemble with drops");
-
-        // If drops occurred, telemetry should be dropped first, then os_context, then short_term
-        if !result.dropped_tiers.is_empty() {
-            // Verify drop order: telemetry must come before os_context, etc.
-            let tier_order = vec!["telemetry", "os_context", "short_term", "long_term", "episodic"];
-            let mut last_idx = 0;
-            for dropped in &result.dropped_tiers {
-                if let Some(idx) = tier_order.iter().position(|t| t == dropped) {
-                    assert!(
-                        idx >= last_idx,
-                        "drop order violated: {} came after higher priority tier",
-                        dropped
-                    );
-                    last_idx = idx;
-                }
+            // If episodic is included, telemetry should definitely be dropped
+            if episodic_included {
+                assert!(telemetry_dropped, "telemetry should drop before episodic");
             }
         }
     }
 
-    #[tokio::test]
-    async fn test_toon_encoded_non_sacred_parts() {
-        let mut config = test_config();
-        // Set very low threshold so TOON is always chosen for non-sacred
-        config.esu.save_threshold = 0.01;
-        let context = test_context();
-        let result = assemble(&context, &config).await.expect("should assemble");
-        // Non-sacred parts should be encoded (we can't easily verify TOON vs JSON
-        // from the final prompt, but we verify the prompt is non-empty and valid)
-        assert!(!result.prompt.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_json_encoded_sacred_parts() {
+    #[test]
+    fn test_missing_model_profile_returns_error() {
         let config = test_config();
-        let context = test_context();
-        let result = assemble(&context, &config).await.expect("should assemble");
-        // Sacred content (SoulBox) should be JSON-encoded
-        // JSON encoding of the personality_summary field will contain the string
-        assert!(result.prompt.contains("warm and curious"));
-    }
+        let assembler = PromptAssembler::new();
 
-    #[tokio::test]
-    async fn test_token_count_within_budget() {
-        let config = test_config();
-        let context = test_context();
-        // Budget uses model_profile.output_reserve when > 0, otherwise config default
-        let output_reserve = if context.model_profile.output_reserve > 0 {
-            context.model_profile.output_reserve
-        } else {
-            config.budget.output_reserve_tokens
+        let context = PromptContext {
+            soulbox_snapshot: "soul".into(),
+            user_intent: "intent".into(),
+            user_message: String::new(),
+            short_term: vec![],
+            long_term: vec![],
+            episodic: vec![],
+            os_context: String::new(),
+            telemetry_signals: vec![],
+            model_profile: None, // Missing!
+            trace_context: String::new(),
         };
-        let budget = context.model_profile.context_window - output_reserve;
-        let result = assemble(&context, &config).await.expect("should assemble");
-        assert!(
-            result.token_count <= budget,
-            "token count {} should be <= budget {}",
-            result.token_count,
-            budget
-        );
-    }
 
-    #[tokio::test]
-    async fn test_truncated_flag_set_when_drops_occurred() {
-        let config = test_config();
-        let mut context = test_context();
-        // Set a very tight budget to force drops
-        context.model_profile.context_window = 200;
-        context.model_profile.output_reserve = 50;
-        context.short_term = vec![MemoryResult {
-            node_id: "st1".into(),
-            summary: "a".repeat(500),
-            score: 0.9,
-            tier: "short_term".into(),
-        }];
+        let result = assembler.assemble(&context, &config);
 
-        let result = assemble(&context, &config).await.expect("should assemble");
-        if !result.dropped_tiers.is_empty() {
-            assert!(result.truncated, "truncated flag should be true when drops occurred");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PromptComposerError::MissingField { field } => {
+                assert_eq!(field, "model_profile");
+            }
+            other => panic!("Expected MissingField, got: {}", other),
         }
     }
 
-    #[tokio::test]
-    async fn test_dropped_tiers_reported() {
+    #[test]
+    fn test_relevance_score_ordering() {
         let config = test_config();
-        let mut context = test_context();
-        // Set a very tight budget
-        context.model_profile.context_window = 200;
-        context.model_profile.output_reserve = 50;
-        context.short_term = vec![MemoryResult {
-            node_id: "st1".into(),
-            summary: "a".repeat(500),
-            score: 0.9,
-            tier: "short_term".into(),
-        }];
-        context.long_term = vec![MemoryResult {
-            node_id: "lt1".into(),
-            summary: "b".repeat(500),
-            score: 0.7,
-            tier: "long_term".into(),
-        }];
+        let assembler = PromptAssembler::new();
 
-        let result = assemble(&context, &config).await.expect("should assemble");
-        // Dropped tiers should only contain valid tier names
-        for tier in &result.dropped_tiers {
-            assert!(
-                ["telemetry", "os_context", "short_term", "long_term", "episodic"].contains(&tier.as_str()),
-                "dropped tier '{}' should be a valid tier name",
-                tier
-            );
+        // Create entries with different relevance scores
+        let context = PromptContext {
+            soulbox_snapshot: "soul".into(),
+            user_intent: "intent".into(),
+            user_message: String::new(),
+            short_term: vec![
+                PromptContextEntry {
+                    id: "low".into(),
+                    content: "x".repeat(100),
+                    relevance_score: 0.1,
+                    tier: "short_term".into(),
+                },
+                PromptContextEntry {
+                    id: "high".into(),
+                    content: "y".repeat(100),
+                    relevance_score: 0.9,
+                    tier: "short_term".into(),
+                },
+            ],
+            long_term: vec![],
+            episodic: vec![],
+            os_context: String::new(),
+            telemetry_signals: vec![],
+            model_profile: Some(test_model_profile(200, 50)), // Very limited budget
+            trace_context: String::new(),
+        };
+
+        let result = assembler.assemble(&context, &config).expect("assembly should succeed");
+
+        // High relevance entry should be more likely to be included
+        let prompt = result.assembled_prompt;
+        if prompt.contains("short_term") {
+            // If short_term tier is included, check that high-relevance is prioritized
+            let has_high = prompt.contains("\"id\":\"high\"") || prompt.contains("id=high");
+            let has_low = prompt.contains("\"id\":\"low\"") || prompt.contains("id=low");
+
+            // If only one can fit, it should be the high relevance one
+            if has_high && !has_low {
+                // This is expected behavior
+            } else if has_low && !has_high {
+                panic!("Low relevance entry included before high relevance");
+            }
+            // If both are included, that's fine (budget was sufficient)
         }
     }
 }

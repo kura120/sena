@@ -1,8 +1,8 @@
-//! Build script for sena-ui — compiles daemon-bus proto definitions into
-//! Rust client stubs. UI is client-only and does not serve any gRPC services.
+//! Build script for reactive-loop — compiles daemon-bus proto definitions into
+//! Rust client and server stubs. reactive-loop acts as both:
 //!
-//! - **Client** — connects to daemon-bus (BootService) and reactive-loop (UserMessageService)
-//! - **Server** — none (UI is a client)
+//! - **Client** — connects to daemon-bus (BootService, EventBusService), prompt-composer, inference
+//! - **Server** — serves UserMessageService to UI and external clients
 //!
 //! If protoc is not installed, codegen is skipped and the pre-committed
 //! placeholder in src/generated/ keeps the crate compilable.
@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     tonic_build::configure()
-        .build_server(false)
+        .build_server(true)
         .build_client(true)
         .out_dir("src/generated")
         .compile_protos(

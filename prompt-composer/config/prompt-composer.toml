@@ -1,22 +1,23 @@
+# prompt-composer configuration
+
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
-listen_port = 50054
+listen_address = "0.0.0.0"
+listen_port = 50057
 connection_timeout_ms = 5000
 
-[esu]
-save_threshold = 0.15
-latency_threshold_ms = 10
-sacred_always_json = true
+[boot]
+ready_signal_timeout_ms = 5000
 
-[budget]
-output_reserve_tokens = 512
-min_sacred_headroom_pct = 0.1
+[context_window]
+# Token savings threshold for ESU to prefer TOON over JSON (15% per PRD §7.3).
+esu_savings_threshold = 0.15
+# Estimated tokens per character for budget calculations.
+tokens_per_char_estimate = 0.25
 
-[drop_order]
-tiers = ["telemetry", "os_context", "short_term", "long_term", "episodic"]
-
-[telemetry]
-emit_encoding_choices = true
+[sacred]
+# Sacred content is never dropped. These identifiers match PromptContext fields.
+sacred_fields = ["soulbox_snapshot", "user_intent"]
 
 [logging]
 level = "info"

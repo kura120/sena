@@ -1,4 +1,4 @@
-use freya::prelude::*;
+﻿use freya::prelude::*;
 
 use crate::debug_state::DebugState;
 use crate::theme;
@@ -68,7 +68,7 @@ pub fn debug_panel(
                 .height(Size::fill())
                 .overflow(Overflow::Clip)
                 .direction(Direction::Horizontal)
-                // Left sidebar — subsystem health.
+                // Left sidebar ΓÇö subsystem health.
                 .child(
                     rect()
                         .width(Size::px(280.0))
@@ -94,7 +94,7 @@ pub fn debug_panel(
                         .height(Size::fill())
                         .background(theme::SECTION_DIVIDER),
                 )
-                // Main content area — event stream + boot history.
+                // Main content area ΓÇö event stream + boot history.
                 .child(
                     rect()
                         .width(Size::fill())

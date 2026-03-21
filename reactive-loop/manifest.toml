@@ -1,0 +1,4 @@
+name = "reactive-loop"
+language = "rust"
+responsibility = "User-facing message handling and prompt orchestration at Priority Tier 1"
+capability_flags = ["REACTIVE_LOOP_READY"]

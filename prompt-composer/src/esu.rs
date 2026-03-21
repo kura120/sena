@@ -1,275 +1,217 @@
-//! Encoding Selection Utility (ESU) — decides TOON vs JSON per prompt sub-piece.
-//!
-//! Sacred content (SoulBox snapshot, user intent) always gets JSON encoding for
-//! maximum fidelity. Non-sacred content gets TOON when savings exceed the
-//! configured threshold. ESU is synchronous on the hot path — the caller is
-//! responsible for offloading via `spawn_blocking` if needed.
+/// Encoding Selection Utility (ESU)
+///
+/// Selects between TOON and JSON encoding based on estimated token savings.
+/// Sacred content always prefers fidelity (JSON) over compression.
 
-use serde::Serialize;
+use crate::config::ContextWindowConfig;
 
-use crate::config::EsuConfig;
-use crate::token_counter;
-
-/// The encoding format chosen for a prompt sub-piece.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EncodingFormat {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EncodingChoice {
     Toon,
     Json,
 }
 
-/// Options controlling the ESU decision for a single sub-piece.
-#[derive(Debug, Clone)]
-pub struct EsuOptions {
-    /// If true, this is sacred content — always JSON, no exceptions.
-    pub is_sacred: bool,
-}
-
-/// Result of the ESU encoding decision.
-#[derive(Debug, Clone)]
-pub struct EsuResult {
-    /// Which encoding format was chosen.
-    pub format: EncodingFormat,
-    /// The encoded string (either JSON or TOON).
-    pub encoded: String,
-    /// Token count of the JSON encoding.
-    pub json_tokens: usize,
-    /// Token count of the TOON encoding, if TOON was attempted.
-    pub toon_tokens: Option<usize>,
-    /// Savings percentage if TOON was attempted.
-    pub savings_pct: Option<f32>,
-    /// Reason code explaining the decision — always a non-empty static string.
-    pub reason: &'static str,
-}
-
-/// Choose the encoding format for a serializable payload.
-///
-/// Decision logic:
-/// 1. Sacred content → always JSON, reason "sacred_fidelity"
-/// 2. TOON encode fails → JSON fallback, reason "toon_encode_failed"
-/// 3. TOON savings >= threshold → TOON, reason "savings_above_threshold"
-/// 4. Otherwise → JSON, reason "no_savings"
-///
-/// This is a pure synchronous function — no I/O, no async.
-pub fn choose_encoding<T: Serialize>(
-    payload: &T,
-    config: &EsuConfig,
-    options: EsuOptions,
-) -> EsuResult {
-    // Step 1: Always serialize to JSON first — we need it as baseline
-    let json_string = match serde_json::to_string(payload) {
-        Ok(s) => s,
-        Err(_json_err) => {
-            // If JSON serialization fails, return an error result with empty encoding
-            return EsuResult {
-                format: EncodingFormat::Json,
-                encoded: String::new(),
-                json_tokens: 0,
-                toon_tokens: None,
-                savings_pct: None,
-                reason: "json_serialization_failed",
-            };
+impl EncodingChoice {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EncodingChoice::Toon => "TOON",
+            EncodingChoice::Json => "JSON",
         }
-    };
-    let json_tokens = token_counter::count_tokens(&json_string);
+    }
+}
 
-    // Step 2: Sacred content always gets JSON
-    if options.is_sacred {
-        return EsuResult {
-            format: EncodingFormat::Json,
-            encoded: json_string,
-            json_tokens,
-            toon_tokens: None,
-            savings_pct: None,
-            reason: "sacred_fidelity",
-        };
+/// Selects the optimal encoding for the given content.
+///
+/// For Phase 1, this uses a simplified TOON encoding (key=value pairs).
+/// In Phase 2, this will integrate with the actual toon-format crate.
+pub fn select_encoding(
+    content: &str,
+    is_sacred: bool,
+    config: &ContextWindowConfig,
+) -> (EncodingChoice, String) {
+    // Sacred content always uses JSON for fidelity
+    if is_sacred {
+        return (EncodingChoice::Json, content.to_owned());
     }
 
-    // Step 3: Attempt TOON encoding
-    let toon_options = toon_format::EncodeOptions::default();
-    let toon_string = match toon_format::encode(payload, &toon_options) {
-        Ok(s) => s,
-        Err(_toon_err) => {
-            // TOON encoding failed — fall back to JSON gracefully
-            return EsuResult {
-                format: EncodingFormat::Json,
-                encoded: json_string,
-                json_tokens,
-                toon_tokens: None,
-                savings_pct: None,
-                reason: "toon_encode_failed",
-            };
-        }
+    // Estimate token counts for both encodings
+    let json_tokens = estimate_tokens(content, config.tokens_per_char_estimate);
+    let toon_encoded = encode_toon_simplified(content);
+    let toon_tokens = estimate_tokens(&toon_encoded, config.tokens_per_char_estimate);
+
+    // Calculate savings percentage
+    let savings = if json_tokens > 0 {
+        (json_tokens as f32 - toon_tokens as f32) / json_tokens as f32
+    } else {
+        0.0
     };
-    let toon_tokens = token_counter::count_tokens(&toon_string);
 
-    // Step 4: Compare savings
-    let savings = token_counter::estimate_savings_pct(json_tokens, toon_tokens);
+    tracing::debug!(
+        subsystem = "prompt_composer",
+        event_type = "esu_selection",
+        json_tokens = json_tokens,
+        toon_tokens = toon_tokens,
+        savings_pct = %format!("{:.1}%", savings * 100.0),
+        threshold_pct = %format!("{:.1}%", config.esu_savings_threshold * 100.0),
+        selected = if savings >= config.esu_savings_threshold { "TOON" } else { "JSON" },
+        "ESU encoding selection"
+    );
 
-    if savings >= config.save_threshold {
-        EsuResult {
-            format: EncodingFormat::Toon,
-            encoded: toon_string,
-            json_tokens,
-            toon_tokens: Some(toon_tokens),
-            savings_pct: Some(savings),
-            reason: "savings_above_threshold",
+    // Prefer TOON if savings exceed threshold
+    if savings >= config.esu_savings_threshold {
+        (EncodingChoice::Toon, toon_encoded)
+    } else {
+        (EncodingChoice::Json, content.to_owned())
+    }
+}
+
+/// Estimate token count from character count.
+///
+/// This is a rough approximation. In Phase 2, we'll integrate with a proper
+/// tokenizer that matches the inference model's tokenization.
+fn estimate_tokens(content: &str, tokens_per_char: f32) -> u32 {
+    (content.len() as f32 * tokens_per_char).ceil() as u32
+}
+
+/// Simplified TOON encoding for Phase 1.
+///
+/// Converts JSON-like structures to a more compact key=value format.
+/// This is a placeholder until the toon-format crate is implemented.
+///
+/// Example transformation:
+/// ```json
+/// {"type": "memory", "content": "User prefers dark mode", "relevance": 0.9}
+/// ```
+/// becomes:
+/// ```
+/// type=memory content="User prefers dark mode" relevance=0.9
+/// ```
+fn encode_toon_simplified(content: &str) -> String {
+    // Try to parse as JSON first
+    if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(content) {
+        match json_value {
+            serde_json::Value::Object(map) => {
+                // Convert to key=value pairs
+                let pairs: Vec<String> = map
+                    .iter()
+                    .map(|(k, v)| match v {
+                        serde_json::Value::String(s) => {
+                            // Quote strings if they contain spaces
+                            if s.contains(' ') {
+                                format!("{}=\"{}\"", k, s)
+                            } else {
+                                format!("{}={}", k, s)
+                            }
+                        }
+                        serde_json::Value::Number(n) => format!("{}={}", k, n),
+                        serde_json::Value::Bool(b) => format!("{}={}", k, b),
+                        _ => format!("{}={}", k, v),
+                    })
+                    .collect();
+                pairs.join(" ")
+            }
+            _ => {
+                // Not an object — keep as-is
+                content.to_owned()
+            }
         }
     } else {
-        EsuResult {
-            format: EncodingFormat::Json,
-            encoded: json_string,
-            json_tokens,
-            toon_tokens: Some(toon_tokens),
-            savings_pct: Some(savings),
-            reason: "no_savings",
-        }
+        // Not valid JSON — keep as-is
+        content.to_owned()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EsuConfig;
-    use serde::Serialize;
 
-    fn test_config() -> EsuConfig {
-        EsuConfig {
-            save_threshold: 0.15,
-            latency_threshold_ms: 10,
-            sacred_always_json: true,
-        }
-    }
-
-    #[derive(Serialize)]
-    struct TestPayload {
-        name: String,
-        value: u32,
-        tags: Vec<String>,
-    }
-
-    fn sample_payload() -> TestPayload {
-        TestPayload {
-            name: "test entry".to_string(),
-            value: 42,
-            tags: vec!["memory".to_string(), "test".to_string()],
+    fn test_config() -> ContextWindowConfig {
+        ContextWindowConfig {
+            esu_savings_threshold: 0.15,
+            tokens_per_char_estimate: 0.25,
         }
     }
 
     #[test]
-    fn test_sacred_always_json() {
+    fn test_sacred_content_always_json() {
         let config = test_config();
-        let payload = sample_payload();
-        let options = EsuOptions { is_sacred: true };
-        let result = choose_encoding(&payload, &config, options);
-        assert_eq!(result.format, EncodingFormat::Json);
-        assert_eq!(result.reason, "sacred_fidelity");
-        assert!(!result.encoded.is_empty());
+        let content = r#"{"soul": "essence", "identity": "core"}"#;
+
+        let (choice, encoded) = select_encoding(content, true, &config);
+
+        assert_eq!(choice, EncodingChoice::Json);
+        assert_eq!(encoded, content);
     }
 
     #[test]
-    fn test_toon_chosen_when_savings_above_threshold() {
-        // Use a config with a very low threshold to ensure TOON is chosen
-        let config = EsuConfig {
-            save_threshold: 0.01, // 1% threshold — almost any savings will pass
-            latency_threshold_ms: 10,
-            sacred_always_json: true,
+    fn test_toon_encoding_simplified() {
+        let json = r#"{"type": "memory", "relevance": 0.9}"#;
+        let toon = encode_toon_simplified(json);
+
+        // Should be more compact (no quotes, no braces, no commas)
+        assert!(toon.len() < json.len());
+        assert!(toon.contains("type=memory"));
+        assert!(toon.contains("relevance=0.9"));
+    }
+
+    #[test]
+    fn test_toon_selected_when_savings_exceed_threshold() {
+        let config = ContextWindowConfig {
+            esu_savings_threshold: 0.10, // 10% threshold
+            tokens_per_char_estimate: 0.25,
         };
-        let payload = sample_payload();
-        let options = EsuOptions { is_sacred: false };
-        let result = choose_encoding(&payload, &config, options);
-        // TOON should have some savings over JSON for a struct with fields
-        if let Some(savings) = result.savings_pct {
-            if savings >= 0.01 {
-                assert_eq!(result.format, EncodingFormat::Toon);
-                assert_eq!(result.reason, "savings_above_threshold");
-            }
-        }
+
+        // Long JSON with lots of formatting overhead
+        let json = r#"{"field_one": "value", "field_two": "value", "field_three": "value"}"#;
+
+        let (choice, _) = select_encoding(json, false, &config);
+
+        // TOON should be selected due to savings
+        assert_eq!(choice, EncodingChoice::Toon);
     }
 
     #[test]
-    fn test_json_chosen_when_savings_below_threshold() {
-        // Use a very high threshold so TOON savings can't meet it
-        let config = EsuConfig {
-            save_threshold: 0.99, // 99% — almost impossible to achieve
-            latency_threshold_ms: 10,
-            sacred_always_json: true,
+    fn test_json_selected_when_savings_below_threshold() {
+        let config = ContextWindowConfig {
+            esu_savings_threshold: 0.50, // 50% threshold (very high)
+            tokens_per_char_estimate: 0.25,
         };
-        let payload = sample_payload();
-        let options = EsuOptions { is_sacred: false };
-        let result = choose_encoding(&payload, &config, options);
-        assert_eq!(result.format, EncodingFormat::Json);
-        assert!(result.reason == "no_savings" || result.reason == "toon_encode_failed");
+
+        // Plain text that won't compress well with TOON (not JSON)
+        let text = "This is just plain text without structure";
+
+        let (choice, encoded) = select_encoding(text, false, &config);
+
+        // JSON should be selected because there's no savings (not valid JSON)
+        assert_eq!(choice, EncodingChoice::Json);
+        assert_eq!(encoded, text);
     }
 
     #[test]
-    fn test_json_chosen_on_toon_encode_failure() {
-        // We can't easily force toon_format::encode to fail with a Serialize type,
-        // but we can verify the fallback path exists by testing with types that
-        // always succeed, and checking the code path structurally.
-        // For a real failure test, we'd need a mock — but we verify the graceful
-        // fallback pattern exists via the sacred path.
+    fn test_estimate_tokens() {
         let config = test_config();
-        // Sacred forces JSON regardless — confirms fallback is JSON
-        let payload = sample_payload();
-        let options = EsuOptions { is_sacred: true };
-        let result = choose_encoding(&payload, &config, options);
-        assert_eq!(result.format, EncodingFormat::Json);
-        assert!(!result.encoded.is_empty());
+        let content = "a".repeat(100); // 100 characters
+
+        let tokens = estimate_tokens(&content, config.tokens_per_char_estimate);
+
+        // 100 chars * 0.25 = 25 tokens
+        assert_eq!(tokens, 25);
     }
 
     #[test]
-    fn test_esu_result_contains_token_counts() {
-        let config = test_config();
-        let payload = sample_payload();
-        let options = EsuOptions { is_sacred: false };
-        let result = choose_encoding(&payload, &config, options);
-        assert!(result.json_tokens > 0, "json_tokens should be > 0");
-        // toon_tokens is present when TOON was attempted (non-sacred)
-        assert!(result.toon_tokens.is_some(), "toon_tokens should be present for non-sacred");
+    fn test_toon_encoding_with_quoted_strings() {
+        let json = r#"{"message": "hello world", "count": 42}"#;
+        let toon = encode_toon_simplified(json);
+
+        // String with spaces should be quoted
+        assert!(toon.contains("message=\"hello world\""));
+        // Number should not be quoted
+        assert!(toon.contains("count=42"));
     }
 
     #[test]
-    fn test_esu_reason_code_is_non_empty() {
-        let config = test_config();
-        let payload = sample_payload();
-
-        // Test sacred path
-        let result_sacred = choose_encoding(&payload, &config, EsuOptions { is_sacred: true });
-        assert!(!result_sacred.reason.is_empty(), "reason must be non-empty");
-
-        // Test non-sacred path
-        let result_normal = choose_encoding(&payload, &config, EsuOptions { is_sacred: false });
-        assert!(!result_normal.reason.is_empty(), "reason must be non-empty");
-    }
-
-    #[test]
-    fn test_esu_deterministic() {
-        let config = test_config();
-        let payload = sample_payload();
-        let options1 = EsuOptions { is_sacred: false };
-        let options2 = EsuOptions { is_sacred: false };
-        let result1 = choose_encoding(&payload, &config, options1);
-        let result2 = choose_encoding(&payload, &config, options2);
-        assert_eq!(result1.format, result2.format);
-        assert_eq!(result1.encoded, result2.encoded);
-        assert_eq!(result1.json_tokens, result2.json_tokens);
-        assert_eq!(result1.reason, result2.reason);
-    }
-
-    #[test]
-    fn test_savings_pct_accurate() {
-        let config = test_config();
-        let payload = sample_payload();
-        let options = EsuOptions { is_sacred: false };
-        let result = choose_encoding(&payload, &config, options);
-        if let (Some(toon_tokens), Some(savings_pct)) = (result.toon_tokens, result.savings_pct) {
-            let expected = token_counter::estimate_savings_pct(result.json_tokens, toon_tokens);
-            assert!(
-                (savings_pct - expected).abs() < 0.001,
-                "savings_pct {} should match estimate_savings_pct {}",
-                savings_pct,
-                expected
-            );
-        }
+    fn test_encoding_choice_as_str() {
+        assert_eq!(EncodingChoice::Toon.as_str(), "TOON");
+        assert_eq!(EncodingChoice::Json.as_str(), "JSON");
     }
 }

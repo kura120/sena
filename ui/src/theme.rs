@@ -1,5 +1,5 @@
-/// Colour constants for the debug panel UI.
-/// All colours defined here — never inline in components.
+﻿/// Colour constants for the debug panel UI.
+/// All colours defined here ΓÇö never inline in components.
 /// Uses `(u8, u8, u8)` tuples for Freya's `Color` type.
 
 /// Status indicator colours.
@@ -13,7 +13,7 @@ pub const VRAM_NORMAL_COLOR: (u8, u8, u8) = (76, 175, 80);
 pub const VRAM_WARNING_COLOR: (u8, u8, u8) = (255, 193, 7);
 pub const VRAM_CRITICAL_COLOR: (u8, u8, u8) = (244, 67, 54);
 
-/// VRAM bar thresholds (as fractions 0.0–1.0).
+/// VRAM bar thresholds (as fractions 0.0ΓÇô1.0).
 pub const VRAM_WARNING_THRESHOLD: f32 = 0.80;
 pub const VRAM_CRITICAL_THRESHOLD: f32 = 0.95;
 

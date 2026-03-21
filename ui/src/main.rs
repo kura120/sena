@@ -1,4 +1,4 @@
-//! Sena UI subsystem — Freya-based debug panel and future chat interface.
+﻿//! Sena UI subsystem ΓÇö Freya-based debug panel and future chat interface.
 //!
 //! Launches a Freya window, connects to daemon-bus via gRPC, and renders
 //! live debug state from the event stream. The debug panel toggles via F12
@@ -75,7 +75,7 @@ fn main() {
     });
 
     // Capture config values for the closure.
-    // Intentional leak — title must be 'static for Freya's WindowConfig closure bound.
+    // Intentional leak ΓÇö title must be 'static for Freya's WindowConfig closure bound.
     let window_title: &'static str = Box::leak(config.window.title.clone().into_boxed_str());
 
     let debug_state_for_app = Arc::clone(&debug_state);

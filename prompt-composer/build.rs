@@ -2,7 +2,7 @@
 //! Rust client and server stubs. prompt-composer acts as both:
 //!
 //! - **Client** — connects to daemon-bus (BootService, EventBusService)
-//! - **Server** — serves PcService to other subsystems via daemon-bus routing
+//! - **Server** — serves PromptComposerService to other subsystems via daemon-bus routing
 //!
 //! If protoc is not installed, codegen is skipped and the pre-committed
 //! placeholder in src/generated/ keeps the crate compilable.
