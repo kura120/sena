@@ -93,4 +93,11 @@ export const STRINGS = {
   MODEL_COMPLETIONS: "compl.",
   MODEL_VRAM: "VRAM",
   MODEL_CONFIRM_DELETE: "Are you sure you want to delete this model?",
+  MODEL_OPEN_FOLDER: "Open Models Folder",
+  MODEL_OLLAMA_DIR: "Ollama Directory",
+  MODEL_OLLAMA_CHANGE: "Change",
+  MODEL_OLLAMA_LOADING: "Loading...",
+  MODEL_OLLAMA_NOT_DETECTED: "Not detected",
+  MODEL_SEARCH_LOCAL: "Search local models...",
+  MODEL_SEARCH_OLLAMA: "Search Ollama models...",
 } as const;

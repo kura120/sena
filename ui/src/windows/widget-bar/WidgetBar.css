@@ -1,3 +1,8 @@
+/* Override global overflow:hidden so tooltips are not clipped */
+html, body, #root {
+  overflow: visible !important;
+}
+
 .widget-bar {
   display: flex;
   align-items: center;
@@ -11,6 +16,8 @@
   transition: opacity 200ms ease, transform 200ms ease;
   user-select: none;
   -webkit-user-select: none;
+  position: relative;
+  overflow: visible;
 }
 
 .widget-bar--hidden {
@@ -61,4 +68,10 @@
   height: 20px;
   background: var(--widget-bar-border);
   margin: 0 4px;
+}
+
+.widget-bar__controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }

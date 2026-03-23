@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { STRINGS } from "../../constants/strings";
-import { IconChevronRight, IconChevronDown } from "../../components/icons";
+import { IconChevronRight, IconChevronDown, IconFolder } from "../../components/icons";
+import { Dropdown } from "../../components/Dropdown/Dropdown";
 import "./ModelPanel.css";
 import type { 
   DebugSnapshot, 
@@ -35,14 +37,22 @@ function getTier(totalMb: number): string {
     return "Ultra";
 }
 
+function truncatePath(path: string, maxLen: number): string {
+    if (path.length <= maxLen) return path;
+    return "..." + path.slice(path.length - maxLen + 3);
+}
+
 export function ModelPanel() {
     const [snapshot, setSnapshot] = useState<DebugSnapshot | null>(null);
     const [assignments, setAssignments] = useState<Record<string, string>>({});
     const [localModels, setLocalModels] = useState<LocalModel[]>([]);
     const [ollamaModels, setOllamaModels] = useState<OllamaModel[]>([]);
-    const [libraryOpen, setLibraryOpen] = useState(false);
+     const [libraryOpen, setLibraryOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<"local" | "ollama">("local");
-    const [extracting, setExtracting] = useState<string | null>(null); // digest being extracted
+    const [extracting, setExtracting] = useState<string | null>(null);
+    const [localSearch, setLocalSearch] = useState("");
+    const [ollamaSearch, setOllamaSearch] = useState("");
+    const [ollamaDir, setOllamaDir] = useState<string>("");
 
     // Load initial data
     useEffect(() => {
@@ -57,6 +67,16 @@ export function ModelPanel() {
         return () => clearInterval(interval);
     }, []);
 
+    // Auto-refresh local models when window regains focus (e.g., after opening models folder)
+    useEffect(() => {
+        const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+            if (focused) {
+                refreshLocalModels();
+            }
+        });
+        return () => { unlisten.then(f => f()); };
+    }, []);
+
     // Listen for progress
     useEffect(() => {
         const unlisten = listen<{ model_name: string, progress: number, copied_bytes: number, total_bytes: number }>("model-extract-progress", (_event) => {
@@ -68,11 +88,15 @@ export function ModelPanel() {
 
     const refreshData = async () => {
         try {
+            // Fetch directory first so we can use it for the Ollama model listing
+            const dir = await invoke<string>("get_ollama_directory");
+            setOllamaDir(dir);
+
             const [local, ollama, assigns, snap] = await Promise.all([
                 invoke<LocalModel[]>("list_local_models"),
-                invoke<OllamaModel[]>("list_ollama_models"),
+                invoke<OllamaModel[]>("list_ollama_models", { manifestsDir: dir }),
                 invoke<Record<string, string>>("get_agent_model_assignments"),
-                invoke<DebugSnapshot>("get_debug_snapshot")
+                invoke<DebugSnapshot>("get_debug_snapshot"),
             ]);
             setLocalModels(local);
             setOllamaModels(ollama);
@@ -80,6 +104,15 @@ export function ModelPanel() {
             setSnapshot(snap);
         } catch (err) {
             console.error("Failed to load initial data:", err);
+        }
+    };
+
+    const refreshLocalModels = async () => {
+        try {
+            const local = await invoke<LocalModel[]>("list_local_models");
+            setLocalModels(local);
+        } catch (err) {
+            console.error("Failed to refresh local models:", err);
         }
     };
 
@@ -124,6 +157,19 @@ export function ModelPanel() {
         }
     };
 
+    const handleChangeOllamaDir = async () => {
+        const result = await invoke<string | null>("select_ollama_directory");
+        if (result) {
+            setOllamaDir(result);
+            try {
+                const models = await invoke<OllamaModel[]>("list_ollama_models", { manifestsDir: result });
+                setOllamaModels(models);
+            } catch (err) {
+                console.error("Failed to refresh Ollama models:", err);
+            }
+        }
+    };
+
     const inf = snapshot?.inference_stats;
     const vram = snapshot?.vram;
     const vramPercent = vram ? (vram.used_mb / vram.total_mb) * 100 : 0;
@@ -137,6 +183,28 @@ export function ModelPanel() {
         if (a.is_active === b.is_active) return a.display_name.localeCompare(b.display_name);
         return a.is_active ? -1 : 1;
     });
+
+    // Filter models
+    const filteredLocal = sortedLocal.filter(m => {
+        if (!localSearch) return true;
+        const q = localSearch.toLowerCase();
+        return m.display_name.toLowerCase().includes(q) || m.filename.toLowerCase().includes(q);
+    });
+
+    const filteredOllama = ollamaModels.filter(m => {
+        if (!ollamaSearch) return true;
+        const q = ollamaSearch.toLowerCase();
+        return m.name.toLowerCase().includes(q) || m.tag.toLowerCase().includes(q);
+    });
+
+    const modelOptions = [
+        { value: "auto", label: STRINGS.MODEL_AUTO },
+        ...sortedLocal.map(m => ({
+            value: m.filename,
+            label: m.display_name,
+            description: `${m.architecture} • ${m.quantization} • ${m.size_gb.toFixed(1)}GB`
+        }))
+    ];
 
     return (
         <div className="model-panel">
@@ -187,19 +255,12 @@ export function ModelPanel() {
                     {AGENT_NAMES.map(agent => (
                         <div key={agent} className="agent-row">
                             <span className="agent-name">{agent}</span>
-                            <select 
-                                className="model-select"
+                            <Dropdown
+                                options={modelOptions}
                                 value={assignments[agent] || "auto"}
-                                onChange={(e) => handleAssign(agent, e.target.value)}
-                                aria-label={`Model assignment for ${agent}`}
-                            >
-                                <option value="auto">{STRINGS.MODEL_AUTO}</option>
-                                {sortedLocal.map(m => (
-                                    <option key={m.filename} value={m.filename}>
-                                        {m.display_name}
-                                    </option>
-                                ))}
-                            </select>
+                                onChange={(val) => handleAssign(agent, val)}
+                                width="160px"
+                            />
                         </div>
                     ))}
                 </div>
@@ -241,9 +302,56 @@ export function ModelPanel() {
                             </button>
                         </div>
 
+                        {activeTab === 'local' && (
+                            <div className="library-toolbar">
+                                <button
+                                    type="button"
+                                    className="action-btn open-folder-btn"
+                                    onClick={() => invoke("open_models_folder").catch(err => console.error("Open folder failed:", err))}
+                                >
+                                    <IconFolder size={14} />
+                                    <span>{STRINGS.MODEL_OPEN_FOLDER}</span>
+                                </button>
+                            </div>
+                        )}
+
+                        {activeTab === 'ollama' && (
+                            <div className="ollama-dir-row">
+                                <span className="ollama-dir-path" title={ollamaDir}>
+                                    {ollamaDir ? truncatePath(ollamaDir, 40) : STRINGS.MODEL_OLLAMA_NOT_DETECTED}
+                                </span>
+                                <button
+                                    type="button"
+                                    className="action-btn"
+                                    onClick={handleChangeOllamaDir}
+                                >
+                                    {STRINGS.MODEL_OLLAMA_CHANGE}
+                                </button>
+                            </div>
+                        )}
+
+                        <div className="library-search">
+                            <input
+                                type="text"
+                                className="library-search-input"
+                                placeholder={activeTab === 'local' ? STRINGS.MODEL_SEARCH_LOCAL : STRINGS.MODEL_SEARCH_OLLAMA}
+                                value={activeTab === 'local' ? localSearch : ollamaSearch}
+                                onChange={(e) => activeTab === 'local' ? setLocalSearch(e.target.value) : setOllamaSearch(e.target.value)}
+                            />
+                            {(activeTab === 'local' ? localSearch : ollamaSearch) && (
+                                <button
+                                    type="button"
+                                    className="library-search-clear"
+                                    onClick={() => activeTab === 'local' ? setLocalSearch("") : setOllamaSearch("")}
+                                >
+                                    ×
+                                </button>
+                            )}
+                        </div>
+
                         <div className="model-list">
                             {activeTab === 'local' ? (
-                                sortedLocal.map(m => (
+                                filteredLocal.map(m => (
                                     <div key={m.path} className={`model-item ${m.is_active ? 'active' : ''}`}>
                                         <div className="model-info">
                                             <div className="model-main">
@@ -275,7 +383,7 @@ export function ModelPanel() {
                                     </div>
                                 ))
                             ) : (
-                                ollamaModels.map(m => (
+                                filteredOllama.map(m => (
                                     <div key={m.blob_digest} className="model-item">
                                         <div className="model-info">
                                             <div className="model-main">

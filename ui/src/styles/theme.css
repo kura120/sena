@@ -35,4 +35,14 @@
   --capability-denied: #ef4444;
   --thought-bg: rgba(255, 255, 255, 0.03);
   --thought-border: rgba(255, 255, 255, 0.1);
+  --surface-1: rgba(15, 15, 18, 0.99);
+  --surface-1-rgb: 15, 15, 18;
+  --surface-2: rgba(22, 22, 28, 0.98);
+  --surface-3: rgba(32, 32, 40, 0.95);
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --bg-surface: rgba(255, 255, 255, 0.04);
+  --text-tertiary: rgba(255, 255, 255, 0.20);
+  --text-disabled: rgba(255, 255, 255, 0.15);
+  --accent-primary: #3b82f6;
+  --font-sans: system-ui, -apple-system, sans-serif;
 }

@@ -493,10 +493,14 @@ pub async fn get_panel_states(
 
     let mut panel_states = std::collections::HashMap::new();
     for &panel_label in crate::overlay::ALL_PANELS {
+        let default_open = match panel_label {
+            "model-panel" | "settings" => false,
+            _ => true,
+        };
         let is_open = store
             .get(panel_label)
             .and_then(|val| val.as_bool())
-            .unwrap_or(true); // Default: all panels open
+            .unwrap_or(default_open);
         panel_states.insert(panel_label.to_string(), is_open);
     }
 
@@ -601,8 +605,7 @@ pub async fn hide_panel(
 /// Show the settings panel (lazy-create if needed).
 #[tauri::command]
 pub async fn show_settings_panel(app_handle: tauri::AppHandle) -> Result<(), String> {
-    crate::overlay::create_settings_window(&app_handle)
-        .map_err(|e| format!("Failed to show settings: {}", e))
+    crate::overlay::show_single_panel(&app_handle, crate::overlay::PANEL_SETTINGS)
 }
 
 /// Read a subsystem's TOML config file and return it as a JSON value.
@@ -948,15 +951,13 @@ pub async fn list_local_models(
 
 /// List Ollama models by scanning the manifests directory.
 #[tauri::command]
-pub async fn list_ollama_models() -> Result<Vec<OllamaModel>, String> {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Cannot determine user home directory".to_string())?;
+pub async fn list_ollama_models(manifests_dir: Option<String>) -> Result<Vec<OllamaModel>, String> {
+    let base_manifests_dir = match manifests_dir {
+        Some(ref dir) => std::path::PathBuf::from(dir),
+        None => detect_ollama_directory(),
+    };
     
-    let manifests_dir = std::path::PathBuf::from(&home)
-        .join(".ollama")
-        .join("models")
-        .join("manifests")
+    let manifests_dir = base_manifests_dir
         .join("registry.ollama.ai")
         .join("library");
     
@@ -1413,10 +1414,128 @@ pub async fn delete_local_model(
     Ok(())
 }
 
+/// Open the inference/models/ directory in the system file explorer.
+#[tauri::command]
+pub fn open_models_folder() -> Result<(), String> {
+    let workspace = crate::config::resolve_workspace_root()?;
+    let models_path = workspace.join("inference").join("models");
+    
+    // Create the directory if it doesn't exist
+    if !models_path.exists() {
+        std::fs::create_dir_all(&models_path)
+            .map_err(|e| format!("Failed to create models directory: {}", e))?;
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(models_path.as_os_str())
+            .spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(models_path.as_os_str())
+            .spawn()
+            .map_err(|e| format!("Failed to open finder: {}", e))?;
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(models_path.as_os_str())
+            .spawn()
+            .map_err(|e| format!("Failed to open file manager: {}", e))?;
+    }
+    
+    info!(path = %models_path.display(), "Opened models folder");
+    Ok(())
+}
+
+/// Detect the default Ollama manifests directory.
+fn detect_ollama_directory() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let user_profile = std::env::var("USERPROFILE")
+            .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        std::path::PathBuf::from(user_profile)
+            .join(".ollama").join("models").join("manifests")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".ollama").join("models").join("manifests")
+    }
+}
+
+/// Get the currently configured Ollama manifests directory.
+/// Checks the persistent store first, then falls back to auto-detection.
+#[tauri::command]
+pub async fn get_ollama_directory(
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    use tauri_plugin_store::StoreExt;
+    
+    let store = app_handle
+        .store("ollama-settings.json") 
+        .map_err(|e| format!("Failed to access store: {}", e))?;
+    
+    if let Some(val) = store.get("ollama_manifests_dir") {
+        if let Some(dir) = val.as_str() {
+            if std::path::Path::new(dir).exists() {
+                return Ok(dir.to_string());
+            }
+        }
+    }
+    
+    let detected = detect_ollama_directory();
+    Ok(detected.to_string_lossy().to_string())
+}
+
+/// Open a folder picker to select the Ollama manifests directory.
+/// Saves the selection to persistent store.
+#[tauri::command]
+pub async fn select_ollama_directory(
+    app_handle: tauri::AppHandle,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    use tauri_plugin_store::StoreExt;
+    
+    let handle = app_handle.clone();
+    let picked = tokio::task::spawn_blocking(move || {
+        handle.dialog()
+            .file()
+            .set_title("Select Ollama Manifests Directory")
+            .blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?;
+    
+    match picked {
+        Some(path) => {
+            let path_str = path.to_string();
+            
+            // Persist to store
+            let store = app_handle
+                .store("ollama-settings.json")
+                .map_err(|e| format!("Failed to access store: {}", e))?;
+            
+            store.set("ollama_manifests_dir".to_string(), serde_json::json!(path_str));
+            store.save().map_err(|e| format!("Failed to persist: {}", e))?;
+            
+            info!(path = %path_str, "Ollama directory changed");
+            Ok(Some(path_str))
+        }
+        None => Ok(None), // User cancelled
+    }
+}
+
 /// Show the model panel window.
 #[tauri::command]
 pub async fn show_model_panel(app_handle: tauri::AppHandle) -> Result<(), String> {
-    crate::overlay::create_model_panel_window(&app_handle)
-        .map_err(|e| format!("Failed to show model panel: {}", e))
+    crate::overlay::show_single_panel(&app_handle, crate::overlay::PANEL_MODEL)
 }
 

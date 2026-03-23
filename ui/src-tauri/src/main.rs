@@ -50,6 +50,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::start_event_stream,
@@ -78,6 +79,9 @@ fn main() {
             commands::get_agent_model_assignments,
             commands::set_agent_model_assignment,
             commands::delete_local_model,
+            commands::open_models_folder,
+            commands::get_ollama_directory,
+            commands::select_ollama_directory,
             commands::show_model_panel,
         ])
         .setup(|app| {

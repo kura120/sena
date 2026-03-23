@@ -76,14 +76,6 @@ export function WidgetBar() {
     }
   };
 
-  const openSettings = () => {
-    invoke("show_settings_panel").catch((err) => console.error("Show settings failed:", err));
-  };
-
-  const openModelPanel = () => {
-    invoke("show_model_panel").catch((err) => console.error("Show model panel failed:", err));
-  };
-
   return (
     <div className={`widget-bar ${animationClass}`}>
       <div className="widget-bar__panels">
@@ -104,25 +96,26 @@ export function WidgetBar() {
         })}
       </div>
       <div className="widget-bar__divider" />
-      <Tooltip text={STRINGS.WIDGET_BAR_SETTINGS}>
-        <button
-          className="widget-bar__button"
-          type="button"
-          onClick={openSettings}
-        >
-          <IconSettings size={18} />
-        </button>
-      </Tooltip>
-      <div className="widget-bar__divider" />
-      <Tooltip text={STRINGS.WIDGET_BAR_MODEL}>
-        <button
-          className="widget-bar__button"
-          type="button"
-          onClick={openModelPanel}
-        >
-          <IconModel size={18} />
-        </button>
-      </Tooltip>
+      <div className="widget-bar__controls">
+        <Tooltip text={STRINGS.WIDGET_BAR_MODEL}>
+          <button
+            className={`widget-bar__button ${activePanels[PANEL_LABELS.MODEL_PANEL] ? "widget-bar__button--active" : ""}`}
+            type="button"
+            onClick={() => togglePanel(PANEL_LABELS.MODEL_PANEL)}
+          >
+            <IconModel size={18} />
+          </button>
+        </Tooltip>
+        <Tooltip text={STRINGS.WIDGET_BAR_SETTINGS}>
+          <button
+            className={`widget-bar__button ${activePanels[PANEL_LABELS.SETTINGS] ? "widget-bar__button--active" : ""}`}
+            type="button"
+            onClick={() => togglePanel(PANEL_LABELS.SETTINGS)}
+          >
+            <IconSettings size={18} />
+          </button>
+        </Tooltip>
+      </div>
     </div>
   );
 }

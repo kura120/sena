@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './SettingsField.css';
 import { RestartBadge } from './RestartBadge';
+import { Dropdown } from '../Dropdown/Dropdown';
 
 interface SettingsFieldProps {
   label: string;
@@ -59,10 +60,6 @@ export function SettingsField({
         }
     }
     onChange(newValue);
-  };
-
-  const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    onChange(e.target.value);
   };
 
   const handleToggleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -127,17 +124,12 @@ export function SettingsField({
 
       case 'dropdown':
         return (
-          <select
-            className="settings-select"
+          <Dropdown
+            options={options || []}
             value={value}
-            onChange={handleSelectChange}
-          >
-            {options?.map(opt => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            onChange={(val) => onChange(val)}
+            width="100%"
+          />
         );
 
       case 'readonly':

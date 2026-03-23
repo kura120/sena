@@ -12,6 +12,7 @@ tonic-build = "0.12"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
 tonic = "0.12"
 prost = "0.13"
 prost-types = "0.13"

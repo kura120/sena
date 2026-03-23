@@ -89,6 +89,7 @@ plans/
 
 # Build artifacts
 *.touch
+ui/src-tauri/gen/
 # -- Documentation & Agent Memory ------------------------------------------
 .github/agents/memory/
 docs/audit/

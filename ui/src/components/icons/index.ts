@@ -21,3 +21,4 @@ export { IconThought } from "./IconThought";
 export { IconModel } from "./IconModel";
 export { IconCheck } from "./IconCheck";
 export { IconWarning } from "./IconWarning";
+export { IconFolder } from "./IconFolder";

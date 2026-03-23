@@ -32,6 +32,8 @@ pub const PANEL_OPEN_ORDER: &[&str] = &[
     PANEL_MEMORY_STATS,
     PANEL_PROMPT_TRACE,
     PANEL_CONVERSATION_TIMELINE,
+    PANEL_MODEL,
+    PANEL_SETTINGS,
 ];
 
 pub const ALL_PANELS: &[&str] = &[
@@ -43,6 +45,8 @@ pub const ALL_PANELS: &[&str] = &[
     PANEL_MEMORY_STATS,
     PANEL_PROMPT_TRACE,
     PANEL_CONVERSATION_TIMELINE,
+    PANEL_MODEL,
+    PANEL_SETTINGS,
 ];
 
 /// Payload sent to each window to coordinate animations
@@ -276,6 +280,44 @@ pub fn create_panel_windows(app: &tauri::App) -> Result<(), Box<dyn std::error::
 
     apply_window_effects(&conversation_timeline_window);
 
+    // Settings panel
+    let settings_window = WebviewWindowBuilder::new(
+        app,
+        PANEL_SETTINGS,
+        WebviewUrl::App("src/windows/settings/index.html".into()),
+    )
+    .title("Settings")
+    .inner_size(700.0, 600.0)
+    .center()
+    .always_on_top(true)
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .skip_taskbar(true)
+    .visible(false)
+    .build()?;
+
+    apply_window_effects(&settings_window);
+
+    // Model panel
+    let model_panel_window = WebviewWindowBuilder::new(
+        app,
+        PANEL_MODEL,
+        WebviewUrl::App("src/windows/model-panel/index.html".into()),
+    )
+    .title("Model Panel")
+    .inner_size(480.0, 560.0)
+    .center()
+    .always_on_top(true)
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .skip_taskbar(true)
+    .visible(false)
+    .build()?;
+
+    apply_window_effects(&model_panel_window);
+
     // Toast window (separate creation function but call it here)
     create_widget_bar_window(app)?;
 
@@ -293,6 +335,47 @@ pub fn create_panel_windows(app: &tauri::App) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+/// Compute the expected widget bar width from its layout.
+/// Layout: 16px pad | 8×32px buttons + 7×2px gaps | 4+1+4 divider | 32px settings | 4+1+4 divider | 32px model | 16px pad
+/// Plus flex gaps (4px) between top-level children
+fn compute_widget_bar_width() -> u32 {
+    let panel_buttons = 8;
+    let button_size = 32;
+    let panel_gap = 2;
+    let panels_width = panel_buttons * button_size + (panel_buttons - 1) * panel_gap; // 270
+    let divider_width = 9; // 1px + 4px margin each side
+    let extra_buttons = 2; // settings + model
+    let outer_padding = 32; // 16px each side
+    let top_level_gap = 4;
+    let top_level_items = 5; // panels, divider, settings, divider, model
+    let top_level_gaps = (top_level_items - 1) * top_level_gap; // 16
+    
+    (panels_width + divider_width * 2 + extra_buttons * button_size + outer_padding + top_level_gaps) as u32
+}
+
+/// Calculate the widget bar position centered on the primary monitor.
+/// In multi-monitor setups, the primary monitor may not start at x=0.
+fn calculate_widget_bar_position(app: &tauri::AppHandle, bar_width: u32) -> (i32, i32) {
+    let primary = app.primary_monitor()
+        .ok()
+        .flatten()
+        .expect("no primary monitor detected");
+    
+    let monitor_width = primary.size().width;
+    let scale = primary.scale_factor();
+    
+    let logical_monitor_width = monitor_width as f64 / scale;
+    let logical_bar_width = bar_width as f64;
+    
+    let x = ((logical_monitor_width - logical_bar_width) / 2.0) as i32;
+    let y = 16_i32;
+    
+    let monitor_x = primary.position().x;
+    let logical_monitor_x = (monitor_x as f64 / scale) as i32;
+    
+    (logical_monitor_x + x, y)
+}
+
 /// Create the widget bar window — centered pill at top of screen.
 /// The widget bar appears first when the overlay opens and hides last when it closes.
 fn create_widget_bar_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -300,31 +383,17 @@ fn create_widget_bar_window(app: &tauri::App) -> Result<(), Box<dyn std::error::
     let overlay_config = &app_state.config.overlay;
     let handle = app.handle();
 
-    // Load saved position — but we'll override x for centering
-    let (_saved_x, widget_bar_y, widget_bar_width, widget_bar_height) = load_window_position(
+    let (_saved_x, _saved_y, widget_bar_width, _saved_height) = load_window_position(
         handle,
         PANEL_WIDGET_BAR,
         &overlay_config.widget_bar_window,
     );
 
-    // Calculate centered x position based on actual monitor width
-    // Widget bar contains 9 buttons total:
-    // - 8 panel buttons (subsystem-health, event-bus, chat, resources, thought-stream, memory-stats, prompt-trace, conversation-timeline)
-    // - 1 divider (1px + 8px margin = 9px)
-    // - 1 settings button
-    // From CSS: each button 32px, gap 2px, padding 16px each side (32px total)
-    // Calculation: (9 buttons × 32px) + (8 gaps × 2px) + 32px padding + 9px divider = 345px
-    let estimated_bar_width = 345.0;
-    
-    let (monitor_width, scale) = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| (m.size().width as f64, m.scale_factor()))
-        .unwrap_or((1920.0, 1.0));
-    
-    let logical_monitor_width = monitor_width / scale;
-    let widget_bar_x = (logical_monitor_width - estimated_bar_width) / 2.0;
+    let bar_content_width = compute_widget_bar_width();
+    let (widget_bar_x, widget_bar_y) = calculate_widget_bar_position(app.handle(), bar_content_width);
+
+    // Extra height to accommodate tooltip below the bar
+    let widget_bar_height = 90.0;
 
     let widget_bar_window = WebviewWindowBuilder::new(
         app,
@@ -333,7 +402,7 @@ fn create_widget_bar_window(app: &tauri::App) -> Result<(), Box<dyn std::error::
     )
     .title("Widget Bar")
     .inner_size(widget_bar_width, widget_bar_height)
-    .position(widget_bar_x, widget_bar_y)
+    .position(widget_bar_x as f64, widget_bar_y as f64)
     .always_on_top(true)
     .transparent(true)
     .decorations(false)
@@ -345,7 +414,7 @@ fn create_widget_bar_window(app: &tauri::App) -> Result<(), Box<dyn std::error::
 
     apply_window_effects(&widget_bar_window);
 
-    info!(widget_bar_x, widget_bar_y, logical_monitor_width, "Widget bar window created at centered position");
+    info!(widget_bar_x, widget_bar_y, "Widget bar window created at centered position");
     Ok(())
 }
 
@@ -463,74 +532,24 @@ pub fn create_notification_history_window(
     Ok(())
 }
 
-/// Create the settings window on demand.
+/// Show the settings window (eagerly created at startup).
 pub fn create_settings_window(app_handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if it already exists — just show and focus it
     if let Some(window) = app_handle.get_webview_window(PANEL_SETTINGS) {
         window.show().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         window.set_focus().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         return Ok(());
     }
-
-    let width = 700.0;
-    let height = 600.0;
-
-    let window = WebviewWindowBuilder::new(
-        app_handle,
-        PANEL_SETTINGS,
-        WebviewUrl::App("src/windows/settings/index.html".into()),
-    )
-    .title("Settings")
-    .inner_size(width, height)
-    .center()
-    .always_on_top(true)
-    .transparent(true)
-    .decorations(false)
-    .shadow(false)
-    .skip_taskbar(true)
-    .visible(true)
-    .build()?;
-
-    apply_window_effects(&window);
-
-    info!("Settings window created");
-
-    Ok(())
+    Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "Settings window not found")) as Box<dyn std::error::Error>)
 }
 
-/// Create the model panel window on demand.
+/// Show the model panel window (eagerly created at startup).
 pub fn create_model_panel_window(app_handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if it already exists — just show and focus it
     if let Some(window) = app_handle.get_webview_window(PANEL_MODEL) {
         window.show().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         window.set_focus().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         return Ok(());
     }
-
-    let width = 480.0;
-    let height = 560.0;
-
-    let window = WebviewWindowBuilder::new(
-        app_handle,
-        PANEL_MODEL,
-        WebviewUrl::App("src/windows/model-panel/index.html".into()),
-    )
-    .title("Model Panel")
-    .inner_size(width, height)
-    .center()
-    .always_on_top(true)
-    .transparent(true)
-    .decorations(false)
-    .shadow(false)
-    .skip_taskbar(true)
-    .visible(true)
-    .build()?;
-
-    apply_window_effects(&window);
-
-    info!("Model panel window created");
-
-    Ok(())
+    Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "Model panel window not found")) as Box<dyn std::error::Error>)
 }
 
 /// Toggle overlay visibility — if any panel is visible, hide all. Otherwise show all.
