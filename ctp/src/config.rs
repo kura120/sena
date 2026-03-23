@@ -14,6 +14,7 @@ pub struct Config {
     pub queue: QueueConfig,
     pub activity: ActivityConfig,
     pub logging: LoggingConfig,
+    pub event_bridge: EventBridgeConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +84,23 @@ pub struct ActivityConfig {
 pub struct LoggingConfig {
     pub level: String,
     pub format: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EventBridgeConfig {
+    pub trigger_topics: Vec<String>,
+    pub user_message: SignalWeightsConfig,
+    pub user_response: SignalWeightsConfig,
+    pub memory_write: SignalWeightsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SignalWeightsConfig {
+    pub urgency: f32,
+    pub emotional_resonance: f32,
+    pub novelty: f32,
+    pub recurrence: f32,
+    pub idle_curiosity: f32,
 }
 
 impl Config {
@@ -261,6 +279,30 @@ idle_10min_threshold_secs = 600
 [logging]
 level = "info"
 format = "json"
+
+[event_bridge]
+trigger_topics = ["TOPIC_USER_MESSAGE_RECEIVED", "TOPIC_USER_MESSAGE_RESPONSE", "TOPIC_MEMORY_WRITE_COMPLETED"]
+
+[event_bridge.user_message]
+urgency = 0.3
+emotional_resonance = 0.5
+novelty = 0.8
+recurrence = 0.2
+idle_curiosity = 0.1
+
+[event_bridge.user_response]
+urgency = 0.2
+emotional_resonance = 0.4
+novelty = 0.6
+recurrence = 0.3
+idle_curiosity = 0.2
+
+[event_bridge.memory_write]
+urgency = 0.1
+emotional_resonance = 0.3
+novelty = 0.4
+recurrence = 0.5
+idle_curiosity = 0.3
 "#;
 
     #[test]

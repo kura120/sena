@@ -7,16 +7,20 @@ connection_timeout_ms = 5000
 [model]
 model_id = "default"
 model_path = "models/default.gguf"
-gpu_layers = 35
-context_length = 4096
-vram_budget_mb = 4096
+gpu_layers = 99
+context_length = 2048
+vram_budget_mb = 5500
 
 [runtime]
 request_queue_max_depth = 64
-request_timeout_ms = 30000
+request_timeout_ms = 120000
 oom_retry_gpu_layer_divisor = 2
 stream_channel_capacity = 32
 swap_drain_timeout_ms = 5000
+
+[streaming]
+heartbeat_interval_ms = 10000
+heartbeat_token = ""
 
 [logging]
 level = "info"

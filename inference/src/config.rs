@@ -7,6 +7,8 @@ pub struct Config {
     pub grpc: GrpcConfig,
     pub model: ModelConfig,
     pub runtime: RuntimeConfig,
+    #[serde(default = "default_streaming_config")]
+    pub streaming: StreamingConfig,
     pub logging: LoggingConfig,
 }
 
@@ -44,6 +46,19 @@ fn default_stream_channel_capacity() -> usize {
 
 fn default_swap_drain_timeout_ms() -> u64 {
     5000
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StreamingConfig {
+    pub heartbeat_interval_ms: u64,
+    pub heartbeat_token: String,
+}
+
+fn default_streaming_config() -> StreamingConfig {
+    StreamingConfig {
+        heartbeat_interval_ms: 10000,
+        heartbeat_token: String::new(),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -231,5 +246,43 @@ format = "json"
             InferenceError::ConfigLoad { .. } => {}
             other => panic!("Expected ConfigLoad error, got: {other}"),
         }
+    }
+
+    #[test]
+    fn test_config_load_with_streaming() {
+        let config_with_streaming = r#"
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+listen_address = "0.0.0.0"
+listen_port = 50055
+connection_timeout_ms = 5000
+
+[model]
+model_id = "default"
+model_path = "models/test.gguf"
+gpu_layers = 35
+context_length = 4096
+vram_budget_mb = 4096
+
+[runtime]
+request_queue_max_depth = 64
+request_timeout_ms = 30000
+oom_retry_gpu_layer_divisor = 2
+
+[streaming]
+heartbeat_interval_ms = 10000
+heartbeat_token = ""
+
+[logging]
+level = "info"
+format = "json"
+"#;
+
+        let file = write_temp_config(config_with_streaming);
+        // unwrap acceptable: this test asserts that config with streaming section loads successfully
+        let config = Config::load(file.path()).expect("test: config with streaming must load");
+
+        assert_eq!(config.streaming.heartbeat_interval_ms, 10000);
+        assert_eq!(config.streaming.heartbeat_token, "");
     }
 }

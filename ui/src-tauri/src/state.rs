@@ -32,6 +32,9 @@ pub struct MemoryStats {
     pub long_term_count: u32,
     pub episodic_count: u32,
     pub last_write: Option<DateTime<Utc>>,
+    pub short_term_last_write: Option<DateTime<Utc>>,
+    pub long_term_last_write: Option<DateTime<Utc>>,
+    pub episodic_last_write: Option<DateTime<Utc>>,
 }
 
 /// A bus event entry for the event feed
@@ -43,6 +46,22 @@ pub struct BusEventEntry {
     pub timestamp: DateTime<Utc>,
 }
 
+/// A capability item with optional reason for degraded/denied states
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct CapabilityItemEntry {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Capability breakdown for MODEL_PROFILE_READY boot signals
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct CapabilityBreakdownEntry {
+    pub granted: Vec<CapabilityItemEntry>,
+    pub degraded: Vec<CapabilityItemEntry>,
+    pub denied: Vec<CapabilityItemEntry>,
+}
+
 /// A boot signal entry for the boot timeline
 #[derive(Debug, Clone, Serialize)]
 pub struct BootSignalEntry {
@@ -50,20 +69,75 @@ pub struct BootSignalEntry {
     pub source_subsystem: String,
     pub required: bool,
     pub timestamp: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<CapabilityBreakdownEntry>,
+}
+
+/// A prompt assembly trace entry
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptTraceEntry {
+    pub sections: Vec<String>,
+    pub toon_output_preview: String,
+    pub token_count: u32,
+    pub token_budget: u32,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// A conversation turn entry for the timeline
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationTurn {
+    pub role: String,
+    pub content_preview: String,
+    pub model_id: String,
+    pub latency_ms: u64,
+    pub tokens_prompt: u32,
+    pub tokens_generated: u32,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Inference performance stats
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct InferenceStats {
+    pub active_model: String,
+    pub model_display_name: String,
+    pub tokens_per_second: f32,
+    pub total_completions: u64,
+    pub last_completion: Option<DateTime<Utc>>,
+}
+
+/// Subsystem health entry with status, timestamp, and optional boot signal data
+#[derive(Debug, Clone)]
+pub struct SubsystemHealthEntry {
+    pub status: SubsystemHealthStatus,
+    pub last_change: Option<DateTime<Utc>>,
+    pub boot_signal_name: Option<String>,
+    pub capabilities: Option<CapabilityBreakdownEntry>,
+}
+
+impl SubsystemHealthEntry {
+    pub fn new() -> Self {
+        Self {
+            status: SubsystemHealthStatus::Unknown,
+            last_change: None,
+            boot_signal_name: None,
+            capabilities: None,
+        }
+    }
 }
 
 /// All known subsystems in Sena
 pub const KNOWN_SUBSYSTEMS: &[&str] = &[
-    "daemon-bus",
-    "memory-engine",
-    "inference",
-    "model-probe",
-    "lora-manager",
-    "ctp",
-    "prompt-composer",
-    "soulbox",
     "agents",
+    "ctp",
+    "daemon-bus",
+    "inference",
+    "lora-manager",
+    "memory-engine",
+    "model-probe",
     "platform",
+    "prompt-composer",
+    "reactive-loop",
+    "soulbox",
     "ui",
 ];
 
@@ -82,7 +156,7 @@ pub const REQUIRED_BOOT_SIGNALS: &[&str] = &[
 /// Central debug state shared between gRPC event handler and Tauri commands
 #[derive(Debug)]
 pub struct DebugState {
-    pub subsystem_health: HashMap<String, SubsystemHealthStatus>,
+    pub subsystem_health: HashMap<String, SubsystemHealthEntry>,
     pub vram_used_mb: u32,
     pub vram_total_mb: u32,
     pub thought_feed: VecDeque<ThoughtEvent>,
@@ -95,13 +169,18 @@ pub struct DebugState {
     pub boot_signal_history_max: usize,
     pub total_events_received: u64,
     pub started_at: Option<DateTime<Utc>>,
+    pub prompt_traces: VecDeque<PromptTraceEntry>,
+    pub prompt_trace_max: usize,
+    pub conversation_turns: VecDeque<ConversationTurn>,
+    pub conversation_turn_max: usize,
+    pub inference_stats: InferenceStats,
 }
 
 impl DebugState {
     pub fn new(thought_feed_max: usize, event_feed_max: usize) -> Self {
         let mut subsystem_health = HashMap::new();
         for subsystem in KNOWN_SUBSYSTEMS {
-            subsystem_health.insert(subsystem.to_string(), SubsystemHealthStatus::Unknown);
+            subsystem_health.insert(subsystem.to_string(), SubsystemHealthEntry::new());
         }
 
         Self {
@@ -118,12 +197,36 @@ impl DebugState {
             boot_signal_history_max: 100,
             total_events_received: 0,
             started_at: None,
+            prompt_traces: VecDeque::new(),
+            prompt_trace_max: 50,
+            conversation_turns: VecDeque::new(),
+            conversation_turn_max: 200,
+            inference_stats: InferenceStats::default(),
         }
     }
 
     /// Set subsystem health status
     pub fn set_subsystem_status(&mut self, subsystem: &str, status: SubsystemHealthStatus) {
-        self.subsystem_health.insert(subsystem.to_string(), status);
+        let entry = self.subsystem_health.entry(subsystem.to_string())
+            .or_insert_with(SubsystemHealthEntry::new);
+        entry.status = status;
+        entry.last_change = Some(Utc::now());
+    }
+
+    /// Set subsystem health with boot signal data
+    pub fn set_subsystem_with_signal(
+        &mut self,
+        subsystem: &str,
+        status: SubsystemHealthStatus,
+        signal_name: String,
+        capabilities: Option<CapabilityBreakdownEntry>,
+    ) {
+        let entry = self.subsystem_health.entry(subsystem.to_string())
+            .or_insert_with(SubsystemHealthEntry::new);
+        entry.status = status;
+        entry.last_change = Some(Utc::now());
+        entry.boot_signal_name = Some(signal_name);
+        entry.capabilities = capabilities;
     }
 
     /// Push a thought event to the feed, maintaining capacity limit
@@ -152,13 +255,39 @@ impl DebugState {
 
     /// Update memory statistics based on tier and count
     pub fn update_memory_stats(&mut self, tier: &str, count: u32) {
+        let now = Some(Utc::now());
         match tier {
-            "short_term" => self.memory_stats.short_term_count = count,
-            "long_term" => self.memory_stats.long_term_count = count,
-            "episodic" => self.memory_stats.episodic_count = count,
+            "short_term" => {
+                self.memory_stats.short_term_count = count;
+                self.memory_stats.short_term_last_write = now;
+            }
+            "long_term" => {
+                self.memory_stats.long_term_count = count;
+                self.memory_stats.long_term_last_write = now;
+            }
+            "episodic" => {
+                self.memory_stats.episodic_count = count;
+                self.memory_stats.episodic_last_write = now;
+            }
             _ => {}
         }
-        self.memory_stats.last_write = Some(Utc::now());
+        self.memory_stats.last_write = now;
+    }
+
+    /// Push a prompt trace entry, maintaining capacity limit
+    pub fn push_prompt_trace(&mut self, trace: PromptTraceEntry) {
+        self.prompt_traces.push_front(trace);
+        while self.prompt_traces.len() > self.prompt_trace_max {
+            self.prompt_traces.pop_back();
+        }
+    }
+
+    /// Push a conversation turn, maintaining capacity limit
+    pub fn push_conversation_turn(&mut self, turn: ConversationTurn) {
+        self.conversation_turns.push_front(turn);
+        while self.conversation_turns.len() > self.conversation_turn_max {
+            self.conversation_turns.pop_back();
+        }
     }
 }
 
@@ -265,10 +394,9 @@ mod tests {
 
         // All known subsystems should start as Unknown
         for subsystem in KNOWN_SUBSYSTEMS {
-            assert_eq!(
-                state.subsystem_health.get(*subsystem),
-                Some(&SubsystemHealthStatus::Unknown)
-            );
+            let (status, timestamp) = state.subsystem_health.get(*subsystem).unwrap();
+            assert_eq!(*status, SubsystemHealthStatus::Unknown);
+            assert!(timestamp.is_none());
         }
 
         assert_eq!(state.thought_feed.len(), 0);
@@ -285,16 +413,13 @@ mod tests {
 
         state.set_subsystem_status("daemon-bus", SubsystemHealthStatus::Ready);
 
-        assert_eq!(
-            state.subsystem_health.get("daemon-bus"),
-            Some(&SubsystemHealthStatus::Ready)
-        );
+        let (status, timestamp) = state.subsystem_health.get("daemon-bus").unwrap();
+        assert_eq!(*status, SubsystemHealthStatus::Ready);
+        assert!(timestamp.is_some());
 
         // Other subsystems should still be Unknown
-        assert_eq!(
-            state.subsystem_health.get("inference"),
-            Some(&SubsystemHealthStatus::Unknown)
-        );
+        let (status, _) = state.subsystem_health.get("inference").unwrap();
+        assert_eq!(*status, SubsystemHealthStatus::Unknown);
     }
 
     #[test]

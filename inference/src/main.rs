@@ -284,6 +284,15 @@ async fn async_main() -> i32 {
     });
 
     // ── Step 9: Signal INFERENCE_READY ───────────────────────────────────
+    // Get display_name and VRAM info from registry
+    let display_name = engine
+        .registry()
+        .get_display_name(&model_id)
+        .await
+        .unwrap_or_else(|_| model_id.clone());
+
+    let vram_used_mb = engine.registry().total_vram_allocated_mb().await;
+
     let ready_request = tonic::Request::new(BootSignalRequest {
         subsystem_id: SUBSYSTEM_ID.to_owned(),
         signal: BootSignal::InferenceReady.into(),
@@ -295,8 +304,63 @@ async fn async_main() -> i32 {
                 subsystem = SUBSYSTEM_ID,
                 event_type = "boot_signal_sent",
                 signal = "INFERENCE_READY",
+                model_display_name = %display_name,
+                vram_used_mb = vram_used_mb,
                 "INFERENCE_READY signaled to daemon-bus"
             );
+
+            // Publish VRAM and model info to the event bus for UI consumption
+            // This allows the debug UI to display VRAM usage and model display name
+            let vram_total_mb = config.model.vram_budget_mb;
+            let model_info_payload = serde_json::json!({
+                "model_id": &model_id,
+                "model_display_name": &display_name,
+                "vram_used_mb": vram_used_mb,
+                "vram_total_mb": vram_total_mb,
+            });
+
+            // Connect to event bus and publish the model info
+            match EventBusServiceClient::connect(daemon_bus_address.clone()).await {
+                Ok(mut event_client) => {
+                    let bus_event = crate::generated::sena_daemonbus_v1::BusEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        topic: EventTopic::TopicInferenceModelSwitching.into(),
+                        source_subsystem: SUBSYSTEM_ID.to_string(),
+                        payload: model_info_payload.to_string().into_bytes(),
+                        trace_context: String::new(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    };
+
+                    let publish_request = tonic::Request::new(
+                        crate::generated::sena_daemonbus_v1::PublishRequest {
+                            event: Some(bus_event),
+                        },
+                    );
+
+                    if let Err(publish_error) = event_client.publish(publish_request).await {
+                        tracing::warn!(
+                            subsystem = SUBSYSTEM_ID,
+                            event_type = "model_info_publish_failed",
+                            error = %publish_error,
+                            "failed to publish model info to event bus (non-fatal)"
+                        );
+                    } else {
+                        tracing::info!(
+                            subsystem = SUBSYSTEM_ID,
+                            event_type = "model_info_published",
+                            "published model info to event bus for UI"
+                        );
+                    }
+                }
+                Err(connect_error) => {
+                    tracing::warn!(
+                        subsystem = SUBSYSTEM_ID,
+                        event_type = "event_bus_connect_failed",
+                        error = %connect_error,
+                        "failed to connect to event bus to publish model info (non-fatal)"
+                    );
+                }
+            }
         }
         Err(signal_error) => {
             tracing::error!(
@@ -325,21 +389,23 @@ async fn async_main() -> i32 {
 
     tokio::spawn(async move {
         // Create a new BootServiceClient for this task
-        let mut event_boot_client = match BootServiceClient::connect(event_daemon_bus_address.clone()).await {
-            Ok(client) => client,
-            Err(connect_error) => {
-                tracing::error!(
-                    subsystem = SUBSYSTEM_ID,
-                    event_type = "event_boot_client_connect_failed",
-                    error = %connect_error,
-                    "failed to connect boot client for model switching events"
-                );
-                return;
-            }
-        };
+        let mut event_boot_client =
+            match BootServiceClient::connect(event_daemon_bus_address.clone()).await {
+                Ok(client) => client,
+                Err(connect_error) => {
+                    tracing::error!(
+                        subsystem = SUBSYSTEM_ID,
+                        event_type = "event_boot_client_connect_failed",
+                        error = %connect_error,
+                        "failed to connect boot client for model switching events"
+                    );
+                    return;
+                }
+            };
 
         // Create EventBusServiceClient
-        let mut event_client = match EventBusServiceClient::connect(event_daemon_bus_address).await {
+        let mut event_client = match EventBusServiceClient::connect(event_daemon_bus_address).await
+        {
             Ok(client) => client,
             Err(connect_error) => {
                 tracing::error!(
@@ -389,19 +455,20 @@ async fn async_main() -> i32 {
                     );
 
                     // Parse the payload as JSON
-                    let payload = match serde_json::from_slice::<ModelSwitchPayload>(&bus_event.payload) {
-                        Ok(p) => p,
-                        Err(parse_error) => {
-                            tracing::error!(
-                                subsystem = SUBSYSTEM_ID,
-                                event_type = "model_switch_payload_parse_failed",
-                                event_id = %bus_event.event_id,
-                                error = %parse_error,
-                                "failed to parse model switch payload"
-                            );
-                            continue;
-                        }
-                    };
+                    let payload =
+                        match serde_json::from_slice::<ModelSwitchPayload>(&bus_event.payload) {
+                            Ok(p) => p,
+                            Err(parse_error) => {
+                                tracing::error!(
+                                    subsystem = SUBSYSTEM_ID,
+                                    event_type = "model_switch_payload_parse_failed",
+                                    event_id = %bus_event.event_id,
+                                    error = %parse_error,
+                                    "failed to parse model switch payload"
+                                );
+                                continue;
+                            }
+                        };
 
                     // Call swap_model
                     tracing::info!(

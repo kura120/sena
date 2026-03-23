@@ -20,6 +20,7 @@ use crate::error::ReactiveLoopError;
 use crate::generated::sena_daemonbus_v1::{
     boot_service_client::BootServiceClient, event_bus_service_client::EventBusServiceClient,
     inference_service_client::InferenceServiceClient,
+    memory_service_client::MemoryServiceClient,
     prompt_composer_service_client::PromptComposerServiceClient,
     user_message_service_server::UserMessageServiceServer, BootSignal, BootSignalRequest,
     EventTopic, SubscribeRequest,
@@ -244,12 +245,51 @@ async fn async_main() -> i32 {
         "all service clients initialized"
     );
 
+    // ========== STEP 5.5: Try to connect to memory-engine (optional) ==========
+    let memory_engine_address = config.grpc.memory_engine_address.clone();
+    let memory_service_client = match tokio::time::timeout(
+        connect_timeout,
+        MemoryServiceClient::connect(memory_engine_address.clone()),
+    )
+    .await
+    {
+        Ok(Ok(client)) => {
+            tracing::info!(
+                subsystem = SUBSYSTEM_ID,
+                event_type = "memory_engine_connected",
+                address = %memory_engine_address,
+                "connected to memory-engine"
+            );
+            Some(client)
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(
+                subsystem = SUBSYSTEM_ID,
+                event_type = "memory_engine_connection_failed",
+                address = %memory_engine_address,
+                error = %e,
+                "failed to connect to memory-engine (conversation turns will not be persisted)"
+            );
+            None
+        }
+        Err(_) => {
+            tracing::warn!(
+                subsystem = SUBSYSTEM_ID,
+                event_type = "memory_engine_connection_timeout",
+                address = %memory_engine_address,
+                "memory-engine connection timed out (conversation turns will not be persisted)"
+            );
+            None
+        }
+    };
+
     // ========== STEP 6: Initialize Handler ==========
     let handler = Arc::new(MessageHandler::new(
         Arc::clone(&config),
         event_bus_client,
         inference_client,
         prompt_composer_client,
+        memory_service_client,
     ));
 
     // ========== STEP 7: Start gRPC Server ==========

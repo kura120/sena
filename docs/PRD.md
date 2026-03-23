@@ -1508,11 +1508,11 @@ Every subsystem ships with its own test suite. The following testing strategies 
 - [x] model-probe — runtime model capability detection, HardwareProfile, ModelCapabilityProfile
 - [x] ech0 — local-first knowledge graph memory crate
 - [x] memory-engine — concurrent tiered memory, ech0 integration, MemoryService gRPC
-- [ ] inference — llama-cpp-rs ownership, InferenceService gRPC, OOM handling, model registry
+- [x] inference — llama-cpp-rs ownership, InferenceService gRPC, OOM handling, model registry
 - [ ] CTP — continuous thought loop, relevance evaluator, thought queue, memory consolidation
 
 **Debug UI — built immediately after Milestone A**
-- [ ] Debug UI (Freya) — subsystem health, VRAM allocations, CTP thought stream live feed, memory tier stats, event bus monitor, inference token/s
+- [ ] Debug UI (Tauri) — subsystem health, VRAM allocations, CTP thought stream live feed, memory tier stats, event bus monitor, inference token/s
 - Rationale: built here so Milestone B and beyond are developed with full observability. Grows with each milestone.
 
 **Milestone B — Sena can be spoken to**

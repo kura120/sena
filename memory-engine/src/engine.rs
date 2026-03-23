@@ -209,21 +209,25 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
 
         // Acquire the write lock ONLY for the tier bookkeeping update.
         // This block is synchronous — no await inside.
-        match entry.target_tier {
+        // Also capture the tier count for event payload.
+        let tier_count = match entry.target_tier {
             TargetTier::ShortTerm => {
                 let mut guard = self.short_term.write().await;
                 guard.insert(entry_id);
+                guard.entry_count()
                 // guard is dropped here — lock released before broadcast
             }
             TargetTier::LongTerm => {
                 let mut guard = self.long_term.write().await;
                 guard.insert(entry_id);
+                guard.entry_count()
             }
             TargetTier::Episodic => {
                 let mut guard = self.episodic.write().await;
                 guard.append(entry_id);
+                guard.entry_count()
             }
-        }
+        };
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -237,7 +241,7 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
         );
 
         // Broadcast event AFTER releasing the write lock.
-        self.broadcast_event(EventTopic::TopicMemoryWriteCompleted, "write_completed")
+        self.broadcast_write_completed_event(tier_name, tier_count)
             .await;
 
         Ok(entry_id_string)
@@ -397,6 +401,62 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
     // ─────────────────────────────────────────────────────────────────────
     // Event broadcasting
     // ─────────────────────────────────────────────────────────────────────
+
+    /// Broadcast TOPIC_MEMORY_WRITE_COMPLETED event with tier and count payload.
+    ///
+    /// This must **always** be called after releasing any write lock — never
+    /// from inside a lock scope. If the broadcast fails, the error is logged
+    /// but not propagated — the memory operation itself already succeeded,
+    /// and failing to notify daemon-bus should not roll back the write.
+    async fn broadcast_write_completed_event(&self, tier_name: &str, tier_count: usize) {
+        let payload_json = serde_json::json!({
+            "tier": tier_name,
+            "count": tier_count
+        });
+
+        let payload = payload_json.to_string().into_bytes();
+
+        let event = BusEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            topic: EventTopic::TopicMemoryWriteCompleted.into(),
+            source_subsystem: "memory_engine".to_owned(),
+            payload,
+            trace_context: String::new(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let request = tonic::Request::new(PublishRequest { event: Some(event) });
+
+        // Clone the client so we can call it without holding &self across
+        // the gRPC await. The bus field is Arc<DaemonBusClient> and
+        // DaemonBusClient is cheaply cloneable (it wraps a tonic Channel).
+        let mut bus_client = (*self.bus).clone();
+
+        match bus_client.publish(request).await {
+            Ok(_response) => {
+                tracing::debug!(
+                    subsystem = "memory_engine",
+                    component = "engine",
+                    event_type = "write_completed",
+                    tier = tier_name,
+                    count = tier_count,
+                    "TOPIC_MEMORY_WRITE_COMPLETED event broadcast succeeded"
+                );
+            }
+            Err(grpc_error) => {
+                // Log but do not propagate — the memory operation already
+                // succeeded. daemon-bus will eventually reconcile.
+                tracing::warn!(
+                    subsystem = "memory_engine",
+                    component = "engine",
+                    event_type = "write_completed",
+                    tier = tier_name,
+                    grpc_code = ?grpc_error.code(),
+                    "event broadcast to daemon-bus failed — operation still committed"
+                );
+            }
+        }
+    }
 
     /// Broadcast a memory state change event to daemon-bus.
     ///

@@ -119,6 +119,9 @@ mod tests {
             sacred: crate::config::SacredConfig {
                 sacred_fields: vec!["soulbox_snapshot".into(), "user_intent".into()],
             },
+            response_format: crate::config::ResponseFormatConfig {
+                system_instruction: "Respond conversationally and directly.".into(),
+            },
             logging: crate::config::LoggingConfig {
                 level: "info".into(),
                 format: "json".into(),

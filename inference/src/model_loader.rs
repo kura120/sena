@@ -18,6 +18,7 @@ pub struct ModelHandle {
     pub(crate) backend: Arc<LlamaBackend>,
     pub(crate) model_id: String,
     pub(crate) context_length: u32,
+    pub(crate) display_name: String,
 }
 
 // SAFETY: LlamaModel and LlamaBackend are thread-safe behind Arc.
@@ -47,6 +48,165 @@ pub fn estimate_vram_mb(model_path: &Path) -> Result<u32, InferenceError> {
     let estimated_vram_mb = ((size_mb as f64) * 1.2) as u32;
 
     Ok(estimated_vram_mb)
+}
+
+/// Extract display name from GGUF metadata if available, otherwise fall back to model_id.
+/// This is called after the model is loaded to get a human-readable name for the UI.
+fn extract_display_name(model_path: &Path, model_id: &str) -> String {
+    parse_gguf_general_name(model_path).unwrap_or_else(|| extract_display_name_fallback(model_id))
+}
+
+/// Fallback display name when GGUF metadata is unavailable — just use model_id.
+fn extract_display_name_fallback(model_id: &str) -> String {
+    model_id.to_string()
+}
+
+/// Parse the GGUF file header and extract the `general.name` metadata field.
+/// Returns `None` if the file cannot be read, has an invalid GGUF header, or the key is absent.
+///
+/// GGUF metadata format (simplified):
+/// - Magic: "GGUF" (4 bytes)
+/// - Version: u32
+/// - Tensor count: u64
+/// - Metadata KV count: u64
+/// - Metadata KV pairs: key_len (u64), key (bytes), value_type (u32), value_data
+///
+/// String value type = 8, followed by string_len (u64), string_bytes
+fn parse_gguf_general_name(model_path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(model_path).ok()?;
+
+    // Read GGUF magic
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic).ok()?;
+    if &magic != b"GGUF" {
+        return None;
+    }
+
+    // Read version (u32)
+    let mut version_buf = [0u8; 4];
+    file.read_exact(&mut version_buf).ok()?;
+    let _version = u32::from_le_bytes(version_buf);
+
+    // Read tensor_count (u64)
+    let mut tensor_count_buf = [0u8; 8];
+    file.read_exact(&mut tensor_count_buf).ok()?;
+    let _tensor_count = u64::from_le_bytes(tensor_count_buf);
+
+    // Read metadata_kv_count (u64)
+    let mut metadata_kv_count_buf = [0u8; 8];
+    file.read_exact(&mut metadata_kv_count_buf).ok()?;
+    let metadata_kv_count = u64::from_le_bytes(metadata_kv_count_buf);
+
+    // Iterate through metadata KV pairs looking for "general.name"
+    for _ in 0..metadata_kv_count {
+        // Read key length (u64)
+        let mut key_len_buf = [0u8; 8];
+        file.read_exact(&mut key_len_buf).ok()?;
+        let key_len = u64::from_le_bytes(key_len_buf);
+
+        // Read key bytes
+        let mut key_bytes = vec![0u8; key_len as usize];
+        file.read_exact(&mut key_bytes).ok()?;
+        let key = String::from_utf8(key_bytes).ok()?;
+
+        // Read value type (u32)
+        let mut value_type_buf = [0u8; 4];
+        file.read_exact(&mut value_type_buf).ok()?;
+        let value_type = u32::from_le_bytes(value_type_buf);
+
+        // If this is "general.name" and value_type is string (8)
+        if key == "general.name" && value_type == 8 {
+            // Read string length (u64)
+            let mut str_len_buf = [0u8; 8];
+            file.read_exact(&mut str_len_buf).ok()?;
+            let str_len = u64::from_le_bytes(str_len_buf);
+
+            // Read string bytes
+            let mut str_bytes = vec![0u8; str_len as usize];
+            file.read_exact(&mut str_bytes).ok()?;
+            return String::from_utf8(str_bytes).ok();
+        } else {
+            // Skip the value data — we need to know the size based on value_type
+            // For simplicity, if not string or not the key we want, skip by reading
+            // value data. Value types and sizes vary, so this is a simplified version.
+            // For complete implementation, we'd need to handle all GGUF value types.
+            // For now, we'll just try to find general.name and skip others conservatively.
+
+            // Skip value based on type
+            // Type 8 = string: u64 len + bytes
+            // Type 4 = u32: 4 bytes
+            // Type 5 = i32: 4 bytes
+            // Type 6 = f32: 4 bytes
+            // Type 7 = bool: 1 byte
+            // Type 9 = array: u32 type + u64 len + elements
+            // For simplicity in this MVP, we only parse strings fully.
+            // For other types, we'll skip conservatively or return None.
+            match value_type {
+                8 => {
+                    // String: u64 len + bytes
+                    let mut str_len_buf = [0u8; 8];
+                    file.read_exact(&mut str_len_buf).ok()?;
+                    let str_len = u64::from_le_bytes(str_len_buf);
+                    file.seek(SeekFrom::Current(str_len as i64)).ok()?;
+                }
+                4 | 5 | 6 => {
+                    // u32, i32, f32: 4 bytes
+                    file.seek(SeekFrom::Current(4)).ok()?;
+                }
+                7 => {
+                    // bool: 1 byte
+                    file.seek(SeekFrom::Current(1)).ok()?;
+                }
+                0 | 1 | 2 | 3 => {
+                    // u8, i8, u16, i16: 1, 1, 2, 2 bytes
+                    let size = match value_type {
+                        0 | 1 => 1,
+                        2 | 3 => 2,
+                        _ => return None,
+                    };
+                    file.seek(SeekFrom::Current(size)).ok()?;
+                }
+                10 | 11 | 12 => {
+                    // u64, i64, f64: 8 bytes
+                    file.seek(SeekFrom::Current(8)).ok()?;
+                }
+                9 => {
+                    // Array: more complex, skip for now
+                    // Read array type (u32) and array length (u64)
+                    let mut arr_type_buf = [0u8; 4];
+                    file.read_exact(&mut arr_type_buf).ok()?;
+                    let arr_type = u32::from_le_bytes(arr_type_buf);
+
+                    let mut arr_len_buf = [0u8; 8];
+                    file.read_exact(&mut arr_len_buf).ok()?;
+                    let arr_len = u64::from_le_bytes(arr_len_buf);
+
+                    // Calculate element size and skip
+                    let elem_size = match arr_type {
+                        0 | 1 | 7 => 1,
+                        2 | 3 => 2,
+                        4 | 5 | 6 => 4,
+                        10 | 11 | 12 => 8,
+                        8 => {
+                            // Array of strings — too complex for MVP, return None
+                            return None;
+                        }
+                        _ => return None,
+                    };
+                    file.seek(SeekFrom::Current((arr_len * elem_size) as i64))
+                        .ok()?;
+                }
+                _ => {
+                    // Unknown type, cannot continue parsing safely
+                    return None;
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Load a model from disk using llama-cpp-2.
@@ -82,11 +242,15 @@ pub async fn load(
             }
         })?;
 
+        // Extract display name from GGUF metadata
+        let display_name = extract_display_name(&model_path, &model_id);
+
         Ok::<ModelHandle, InferenceError>(ModelHandle {
             model: Arc::new(model),
             backend,
             model_id,
             context_length,
+            display_name,
         })
     })
     .await?;
@@ -149,5 +313,31 @@ mod tests {
         // Static assertion: ModelHandle must be Sync
         fn assert_sync<T: Sync>() {}
         assert_sync::<ModelHandle>();
+    }
+
+    #[test]
+    fn test_extract_display_name_fallback_to_model_id() {
+        // When GGUF metadata extraction returns None or fails,
+        // display_name should fall back to model_id
+        let model_id = "gemma-2b-it";
+        let fallback = extract_display_name_fallback(model_id);
+        assert_eq!(fallback, model_id);
+    }
+
+    #[test]
+    fn test_parse_gguf_general_name_missing_file() {
+        // Should return None for missing file
+        let result = parse_gguf_general_name(Path::new("/nonexistent/model.gguf"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_gguf_general_name_invalid_header() {
+        // Should return None for file with invalid GGUF magic
+        let mut temp = tempfile::NamedTempFile::new().expect("test: temp file creation");
+        temp.write_all(b"NOT_GGUF_MAGIC").expect("test: write data");
+
+        let result = parse_gguf_general_name(temp.path());
+        assert!(result.is_none());
     }
 }

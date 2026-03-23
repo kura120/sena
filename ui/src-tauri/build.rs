@@ -4,7 +4,7 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Skip icon generation for scaffolding phase - icons will be added in Phase 3
     std::env::set_var("TAURI_SKIP_BUNDLE_CONFIG_VALIDATE", "true");
-    
+
     tauri_build::build();
 
     println!("cargo:rerun-if-changed=../../daemon-bus/proto/sena.daemonbus.v1.proto");

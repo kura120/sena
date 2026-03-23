@@ -1,5 +1,6 @@
 :root {
-  --bg-panel: rgba(15, 15, 18, 0.94);
+  --bg-panel: rgba(15, 15, 18, 0.99);
+  --blur-panel: 12px;
   --bg-titlebar: rgba(255, 255, 255, 0.03);
   --bg-hover: rgba(255, 255, 255, 0.05);
   --border: rgba(255, 255, 255, 0.07);
@@ -16,8 +17,22 @@
   --event-ctp: #14b8a6;
   --event-user: #22c55e;
   --event-default: #6b7280;
+  --toast-info: #3b82f6;
+  --toast-success: #22c55e;
+  --toast-warning: #f59e0b;
+  --toast-error: #ef4444;
   --chat-user-bg: #1d4ed8;
+  --chat-user-text: #ffffff;
   --chat-assistant-bg: rgba(255, 255, 255, 0.05);
   --radius: 10px;
   --radius-sm: 6px;
+  --vignette-bg: rgba(0, 0, 0, 0.35);
+  --widget-bar-bg: rgba(20, 20, 25, 0.95);
+  --widget-bar-border: rgba(255, 255, 255, 0.10);
+  --widget-bar-active-bg: rgba(255, 255, 255, 0.08);
+  --capability-granted: #22c55e;
+  --capability-degraded: #f59e0b;
+  --capability-denied: #ef4444;
+  --thought-bg: rgba(255, 255, 255, 0.03);
+  --thought-border: rgba(255, 255, 255, 0.1);
 }

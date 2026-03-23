@@ -83,6 +83,9 @@ impl UserMessageService for UserMessageGrpcService {
             latency_ms: result.latency_ms,
             request_id,
             assembly_trace: result.assembly_trace,
+            pre_thought_text: result.pre_thought_text,
+            thought_content: result.thought_content,
+            chain_of_thought_supported: result.chain_of_thought_supported,
         }))
     }
 }
@@ -104,6 +107,7 @@ mod tests {
                 daemon_bus_address: "http://127.0.0.1:50051".into(),
                 inference_address: "http://127.0.0.1:50055".into(),
                 prompt_composer_address: "http://127.0.0.1:50057".into(),
+                memory_engine_address: "http://127.0.0.1:50052".into(),
                 listen_address: "0.0.0.0".into(),
                 listen_port: 50058,
                 connection_timeout_ms: 5000,
@@ -115,6 +119,11 @@ mod tests {
                 default_max_tokens: 1024,
                 default_temperature: 0.7,
                 request_timeout_ms: 30000,
+            },
+            post_processing: crate::config::PostProcessingConfig {
+                filter_heartbeat_tokens: true,
+                strip_reasoning_tags: false,
+                reasoning_markers: Vec::new(),
             },
             fallback: crate::config::FallbackConfig {
                 unavailable_response: "Error".into(),
@@ -147,6 +156,7 @@ mod tests {
             event_bus_client,
             inference_client,
             prompt_composer_client,
+            None,
         ));
 
         let service = UserMessageGrpcService::new(handler);

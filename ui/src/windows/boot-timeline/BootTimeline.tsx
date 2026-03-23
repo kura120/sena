@@ -1,21 +1,31 @@
 import { useState, useMemo } from "react";
 import { TitleBar } from "../../components/TitleBar/TitleBar";
-import { IconBootTimeline } from "../../components/icons";
+import { IconBootTimeline, IconChevronRight, IconChevronDown } from "../../components/icons";
 import { STRINGS } from "../../constants/strings";
 import { EXPECTED_BOOT_SIGNALS } from "../../constants/panels";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
 import { formatDuration } from "../../utils/time";
-import type { BootSignalEvent } from "../../types";
+import type { BootSignalEvent, CapabilityBreakdown } from "../../types";
+import { useWindowDragSave } from "../../hooks/useWindowDragSave";
+import { useOverlayAnimation } from "../../hooks/useOverlayAnimation";
+import { CapabilityDetail } from "./CapabilityDetail";
+import "./BootTimeline.css";
 
 interface ReceivedSignal {
   signal: string;
   timestamp: Date;
   subsystem: string;
+  capabilities?: CapabilityBreakdown;
 }
 
 export function BootTimeline() {
   const [pinned, setPinned] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [receivedSignals, setReceivedSignals] = useState<Map<string, ReceivedSignal>>(new Map());
+  const [expandedSignals, setExpandedSignals] = useState<Set<string>>(new Set());
+
+  useWindowDragSave();
+  const panelClass = useOverlayAnimation();
 
   useTauriEvent<BootSignalEvent>("boot-signal-received", (payload) => {
     setReceivedSignals(prev => {
@@ -24,10 +34,28 @@ export function BootTimeline() {
         signal: payload.signal,
         timestamp: new Date(payload.timestamp),
         subsystem: payload.subsystem,
+        capabilities: payload.capabilities,
       });
       return next;
     });
   });
+
+  useTauriEvent("subsystems-reset", () => {
+    setReceivedSignals(new Map());
+    setExpandedSignals(new Set());
+  });
+
+  const toggleExpanded = (signal: string) => {
+    setExpandedSignals(prev => {
+      const next = new Set(prev);
+      if (next.has(signal)) {
+        next.delete(signal);
+      } else {
+        next.add(signal);
+      }
+      return next;
+    });
+  };
 
   const processedSignals = useMemo(() => {
     // Sort received to compute deltas correctly based on time
@@ -73,7 +101,7 @@ export function BootTimeline() {
 
   return (
     <div 
-      className="flex flex-col h-full overflow-hidden border rounded-lg shadow-xl"
+      className={`flex flex-col ${collapsed ? '' : 'h-full'} overflow-hidden border rounded-lg shadow-xl panel-glass ${panelClass}`}
       style={{
         background: "var(--bg-panel)",
         borderColor: "var(--border)",
@@ -84,62 +112,87 @@ export function BootTimeline() {
         icon={<IconBootTimeline size={14} />} 
         title={STRINGS.PANEL_BOOT_TIMELINE}
         pinned={pinned}
-        onPinToggle={() => setPinned(!pinned)} 
+        onPinToggle={() => setPinned(!pinned)}
+        collapsed={collapsed}
+        onCollapseToggle={() => setCollapsed(c => !c)}
       />
-      
+      {!collapsed && (
       <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
         <div className="flex flex-col gap-1">
-          {processedSignals.map((item) => (
-            <div 
-              key={item.signal}
-              className={`flex flex-col py-1.5 px-3 rounded transition-colors ${item.signal === 'SENA_READY' ? 'mt-2 border border-dashed border-white/10' : 'hover:bg-white/5'}`}
-            >
-              <div className="flex items-center gap-3">
-                {/* Status Dot */}
+          {processedSignals.map((item) => {
+            const hasCapabilities = item.received?.capabilities !== undefined;
+            const isExpanded = expandedSignals.has(item.signal);
+
+            return (
+              <div 
+                key={item.signal}
+                className={`flex flex-col py-1.5 px-3 rounded transition-colors ${item.signal === 'SENA_READY' ? 'mt-2 border border-dashed border-white/10' : 'hover:bg-white/5'}`}
+              >
                 <div 
-                  className="w-2.5 h-2.5 rounded-full shrink-0 transition-all duration-300"
-                  style={{
-                    background: item.received 
-                      ? "var(--status-ready)" 
-                      : "var(--status-unknown)",
-                    boxShadow: item.received ? "0 0 8px var(--status-ready)" : "none"
-                  }}
-                />
-                
-                {/* Signal Name */}
-                <span className="text-[13px] font-medium grow truncate" style={{ color: "var(--text-primary)" }}>
-                  {item.label}
-                </span>
-
-                {/* Badge */}
-                <span 
-                  className="text-[10px] font-semibold px-1.5 py-px rounded border"
-                  style={{
-                    color: "var(--text-muted)",
-                    borderColor: "var(--border)",
-                  }}
+                  className="flex items-center gap-3 signal-row-content"
+                  onClick={() => hasCapabilities && toggleExpanded(item.signal)}
+                  style={{ cursor: hasCapabilities ? 'pointer' : 'default' }}
                 >
-                  {item.required ? STRINGS.BADGE_REQUIRED : STRINGS.BADGE_OPTIONAL}
-                </span>
+                  {/* Expand Chevron */}
+                  <div className="w-4 flex items-center justify-center">
+                    {hasCapabilities && (
+                      <div className="signal-expand-icon">
+                        {isExpanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+                      </div>
+                    )}
+                  </div>
 
-                {/* Time */}
-                {item.received && (
-                  <span className="text-[11px] font-mono" style={{ color: "var(--text-secondary)" }}>
-                    {item.received.timestamp.toLocaleTimeString([], { hour12: false })}
+                  {/* Status Dot */}
+                  <div 
+                    className="w-2.5 h-2.5 rounded-full shrink-0 transition-all duration-300"
+                    style={{
+                      background: item.received 
+                        ? "var(--status-ready)" 
+                        : "var(--status-unknown)",
+                      boxShadow: item.received ? "0 0 8px var(--status-ready)" : "none"
+                    }}
+                  />
+                  
+                  {/* Signal Name */}
+                  <span className="text-[13px] font-medium grow truncate" style={{ color: "var(--text-primary)" }}>
+                    {item.label}
                   </span>
+
+                  {/* Badge */}
+                  <span 
+                    className="text-[10px] font-semibold px-1.5 py-px rounded border"
+                    style={{
+                      color: "var(--text-muted)",
+                      borderColor: "var(--border)",
+                    }}
+                  >
+                    {item.required ? STRINGS.BADGE_REQUIRED : STRINGS.BADGE_OPTIONAL}
+                  </span>
+
+                  {/* Time */}
+                  {item.received && (
+                    <span className="text-[11px] font-mono" style={{ color: "var(--text-secondary)" }}>
+                      {item.received.timestamp.toLocaleTimeString([], { hour12: false })}
+                    </span>
+                  )}
+                </div>
+
+                {/* Delta Line */}
+                {item.received && item.delta !== undefined && (
+                  <div className="flex items-center ml-[38px] mt-0.5">
+                    <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                      {item.delta > 0 ? `+${formatDuration(item.delta)}` : (item.delta === 0 ? "+0ms" : "")}
+                    </span>
+                  </div>
+                )}
+
+                {/* Capabilities Detail */}
+                {isExpanded && item.received?.capabilities && (
+                  <CapabilityDetail capabilities={item.received.capabilities} />
                 )}
               </div>
-
-              {/* Delta Line */}
-              {item.received && item.delta !== undefined && (
-                <div className="flex items-center ml-[22px] mt-0.5">
-                  <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                    {item.delta > 0 ? `+${formatDuration(item.delta)}` : (item.delta === 0 ? "+0ms" : "")}
-                  </span>
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Total Duration Footer */}
@@ -157,6 +210,7 @@ export function BootTimeline() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

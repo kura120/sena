@@ -23,6 +23,7 @@ pub mod activity;
 pub mod config;
 pub mod context_assembler;
 pub mod error;
+pub mod event_bridge;
 pub mod pipelines;
 pub mod relevance;
 pub mod thought_queue;
@@ -181,7 +182,7 @@ async fn async_main() -> i32 {
     ));
 
     // ── Step 9: Spawn three pipelines ───────────────────────────────────
-    let (generation_handle, evaluation_handle, consolidation_handle, _telemetry_tx) = spawn_all(
+    let (generation_handle, evaluation_handle, consolidation_handle, telemetry_tx) = spawn_all(
         Arc::clone(&config),
         Arc::clone(&thought_queue),
         Arc::clone(&activity_monitor),
@@ -192,6 +193,19 @@ async fn async_main() -> i32 {
         subsystem = SUBSYSTEM_ID,
         event_type = "pipelines_spawned",
         "generation, evaluation, and consolidation pipelines running"
+    );
+
+    // ── Step 9b: Spawn event bridge ─────────────────────────────────────
+    let _event_bridge_handle = event_bridge::spawn_event_bridge(
+        config.event_bridge.clone(),
+        daemon_bus_address.clone(),
+        telemetry_tx,
+    );
+
+    tracing::info!(
+        subsystem = SUBSYSTEM_ID,
+        event_type = "event_bridge_spawned",
+        "event bridge subscribed to daemon-bus events for thought generation"
     );
 
     // ── Step 10: Signal CTP_READY ───────────────────────────────────────

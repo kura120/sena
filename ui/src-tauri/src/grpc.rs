@@ -20,6 +20,24 @@ pub struct BootSignalPayload {
     pub required: bool,
     pub timestamp: String,
     pub subsystem: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<CapabilityBreakdownPayload>,
+}
+
+/// Capability item payload for frontend
+#[derive(Debug, Clone, Serialize)]
+pub struct CapabilityItemPayload {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Capability breakdown payload for frontend
+#[derive(Debug, Clone, Serialize)]
+pub struct CapabilityBreakdownPayload {
+    pub granted: Vec<CapabilityItemPayload>,
+    pub degraded: Vec<CapabilityItemPayload>,
+    pub denied: Vec<CapabilityItemPayload>,
 }
 
 /// Payload for subsystem-status-updated Tauri event
@@ -87,6 +105,51 @@ pub fn extract_boot_signal_name(payload: &[u8]) -> String {
     "UNKNOWN".to_string()
 }
 
+/// Extract capability breakdown from MODEL_PROFILE_READY boot signal payload
+pub fn extract_capabilities_from_payload(
+    payload: &[u8],
+    signal_name: &str,
+) -> Option<crate::state::CapabilityBreakdownEntry> {
+    // Only attempt to extract capabilities for MODEL_PROFILE_READY signals
+    if signal_name != "MODEL_PROFILE_READY" {
+        return None;
+    }
+
+    // Try to parse as JSON
+    let json_str = std::str::from_utf8(payload).ok()?;
+    let json_value: serde_json::Value = serde_json::from_str(json_str).ok()?;
+
+    // Extract capabilities object
+    let capabilities_obj = json_value.get("capabilities")?.as_object()?;
+
+    // Helper to parse capability array
+    let parse_capability_array = |arr_value: Option<&serde_json::Value>| -> Vec<crate::state::CapabilityItemEntry> {
+        arr_value
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| {
+                        let obj = item.as_object()?;
+                        let label = obj.get("label")?.as_str()?.to_string();
+                        let reason = obj.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string());
+                        Some(crate::state::CapabilityItemEntry { label, reason })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let granted = parse_capability_array(capabilities_obj.get("granted"));
+    let degraded = parse_capability_array(capabilities_obj.get("degraded"));
+    let denied = parse_capability_array(capabilities_obj.get("denied"));
+
+    Some(crate::state::CapabilityBreakdownEntry {
+        granted,
+        degraded,
+        denied,
+    })
+}
+
 /// Normalize subsystem name (replace underscores with dashes)
 pub fn normalize_subsystem_name(name: &str) -> String {
     name.replace('_', "-")
@@ -95,11 +158,11 @@ pub fn normalize_subsystem_name(name: &str) -> String {
 /// Derive event category from topic for UI filtering
 fn derive_event_category(topic: i32) -> &'static str {
     match topic {
-        1 | 2 => "boot",                  // Boot signals
-        10..=13 => "error",               // Subsystem lifecycle errors
-        40..=42 => "memory",              // Memory events
-        62..=64 => "ctp",                 // CTP events
-        60 | 61 => "user",                // User messages
+        1 | 2 => "boot",     // Boot signals
+        10..=13 => "error",  // Subsystem lifecycle errors
+        40..=42 => "memory", // Memory events
+        62..=64 => "ctp",    // CTP events
+        60 | 61 => "user",   // User messages
         _ => "default",
     }
 }
@@ -115,14 +178,7 @@ pub async fn run_event_stream(
     let mut attempt = 0u32;
 
     loop {
-        match connect_and_stream(
-            &app_handle,
-            &address,
-            connection_timeout_ms,
-            &debug_state,
-        )
-        .await
-        {
+        match connect_and_stream(&app_handle, &address, connection_timeout_ms, &debug_state).await {
             Ok(_) => {
                 info!("Event stream ended gracefully");
                 attempt = 0; // Reset on clean disconnect
@@ -184,7 +240,31 @@ async fn connect_and_stream(
         }
     }
 
+    // Mark UI as Ready — the UI is definitely running if we reached this point.
+    // This fixes the race where UI_READY is signaled before the event stream connects.
+    if let Ok(mut state) = debug_state.lock() {
+        state.set_subsystem_status("ui", SubsystemHealthStatus::Ready);
+    }
+    let _ = app_handle.emit(
+        "subsystem-status-updated",
+        SubsystemStatusPayload {
+            subsystem: "ui".to_string(),
+            status: "Ready".to_string(),
+        },
+    );
+
     info!("Event stream connected");
+
+    // After the stream connects, daemon-bus replays historical boot signals
+    // as the first messages. Schedule a sync event after a short delay to give
+    // frontend webviews a chance to receive the replayed state via
+    // get_debug_snapshot. This covers the race where JS mounts before the
+    // stream connects.
+    let sync_handle = app_handle.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        let _ = sync_handle.emit("debug-state-sync", ());
+    });
 
     // Process events
     while let Some(event) = stream.message().await? {
@@ -237,12 +317,18 @@ async fn handle_bus_event(
             timestamp: timestamp.to_rfc3339(),
         },
     );
+    tracing::info!(topic = %topic_str, source = %event.source_subsystem, "emitted bus-event to frontend");
 
     // Handle specific topic types
     match EventTopic::try_from(event.topic) {
         Ok(EventTopic::TopicBootSignal) => {
-            handle_boot_signal(app_handle, debug_state, &event.payload, &event.source_subsystem)
-                .await;
+            handle_boot_signal(
+                app_handle,
+                debug_state,
+                &event.payload,
+                &event.source_subsystem,
+            )
+            .await;
         }
         Ok(EventTopic::TopicSubsystemDegraded) => {
             let subsystem = normalize_subsystem_name(&event.source_subsystem);
@@ -281,6 +367,18 @@ async fn handle_bus_event(
         Ok(EventTopic::TopicMemoryWriteCompleted) | Ok(EventTopic::TopicMemoryUpdated) => {
             handle_memory_event(debug_state, &event.payload).await;
         }
+        Ok(EventTopic::TopicPcPromptAssembled) => {
+            handle_prompt_assembled(debug_state, &event.payload).await;
+        }
+        Ok(EventTopic::TopicUserMessageReceived) => {
+            handle_user_message_received(debug_state, &event.payload).await;
+        }
+        Ok(EventTopic::TopicUserMessageResponse) => {
+            handle_user_message_response(debug_state, &event.payload).await;
+        }
+        Ok(EventTopic::TopicInferenceModelSwitching) => {
+            handle_inference_model_switching(debug_state, &event.payload).await;
+        }
         _ => {}
     }
 }
@@ -298,25 +396,79 @@ async fn handle_boot_signal(
 
     let required = crate::state::REQUIRED_BOOT_SIGNALS.contains(&signal_name.as_str());
 
+    // Extract capabilities if present
+    let capabilities = extract_capabilities_from_payload(payload, &signal_name);
+
+    // Convert capabilities for payload emission
+    let capabilities_payload = capabilities.as_ref().map(|caps| CapabilityBreakdownPayload {
+        granted: caps
+            .granted
+            .iter()
+            .map(|item| CapabilityItemPayload {
+                label: item.label.clone(),
+                reason: item.reason.clone(),
+            })
+            .collect(),
+        degraded: caps
+            .degraded
+            .iter()
+            .map(|item| CapabilityItemPayload {
+                label: item.label.clone(),
+                reason: item.reason.clone(),
+            })
+            .collect(),
+        denied: caps
+            .denied
+            .iter()
+            .map(|item| CapabilityItemPayload {
+                label: item.label.clone(),
+                reason: item.reason.clone(),
+            })
+            .collect(),
+    });
+
+    // Clone for later emit (first emit moves these values)
+    let signal_name_clone = signal_name.clone();
+    let subsystem_clone = subsystem.clone();
+
     // Update state
     if let Ok(mut state) = debug_state.lock() {
+        // Clone capabilities before moving into boot_signal_history
+        let capabilities_for_subsystem = capabilities.clone();
+        
         state.push_boot_signal(BootSignalEntry {
             signal_name: signal_name.clone(),
             source_subsystem: subsystem.clone(),
             required,
             timestamp: Utc::now(),
+            capabilities,
         });
 
-        // Update subsystem health based on signal type
+        // Update subsystem health based on signal type, storing signal name and capabilities
         match signal_name.as_str() {
             "INFERENCE_UNAVAILABLE" => {
-                state.set_subsystem_status("inference", SubsystemHealthStatus::Unavailable);
+                state.set_subsystem_with_signal(
+                    "inference",
+                    SubsystemHealthStatus::Unavailable,
+                    signal_name.clone(),
+                    capabilities_for_subsystem,
+                );
             }
             "INFERENCE_DEGRADED" => {
-                state.set_subsystem_status("inference", SubsystemHealthStatus::Degraded);
+                state.set_subsystem_with_signal(
+                    "inference",
+                    SubsystemHealthStatus::Degraded,
+                    signal_name.clone(),
+                    capabilities_for_subsystem,
+                );
             }
             _ => {
-                state.set_subsystem_status(&subsystem, SubsystemHealthStatus::Ready);
+                state.set_subsystem_with_signal(
+                    &subsystem,
+                    SubsystemHealthStatus::Ready,
+                    signal_name.clone(),
+                    capabilities_for_subsystem,
+                );
             }
         }
     }
@@ -329,8 +481,25 @@ async fn handle_boot_signal(
             required,
             timestamp: Utc::now().to_rfc3339(),
             subsystem,
+            capabilities: capabilities_payload,
         },
     );
+
+    // Emit subsystem status update so the health panel reflects boot signals
+    let status_str = match signal_name_clone.as_str() {
+        "INFERENCE_UNAVAILABLE" => "Unavailable",
+        "INFERENCE_DEGRADED" => "Degraded",
+        _ => "Ready",
+    };
+
+    let _ = app_handle.emit(
+        "subsystem-status-updated",
+        SubsystemStatusPayload {
+            subsystem: subsystem_clone.clone(),
+            status: status_str.to_string(),
+        },
+    );
+    tracing::info!(signal = %signal_name_clone, subsystem = %subsystem_clone, status = %status_str, "emitted subsystem-status-updated from boot signal");
 }
 
 async fn update_subsystem_status(
@@ -346,10 +515,10 @@ async fn update_subsystem_status(
 
     // Emit Tauri event
     let status_str = match status {
-        SubsystemHealthStatus::Ready => "ready",
-        SubsystemHealthStatus::Degraded => "degraded",
-        SubsystemHealthStatus::Unavailable => "unavailable",
-        SubsystemHealthStatus::Unknown => "unknown",
+        SubsystemHealthStatus::Ready => "Ready",
+        SubsystemHealthStatus::Degraded => "Degraded",
+        SubsystemHealthStatus::Unavailable => "Unavailable",
+        SubsystemHealthStatus::Unknown => "Unknown",
     };
 
     let _ = app_handle.emit(
@@ -399,6 +568,168 @@ async fn handle_memory_event(debug_state: &Arc<Mutex<DebugState>>, payload: &[u8
     }
 }
 
+async fn handle_prompt_assembled(
+    debug_state: &Arc<Mutex<DebugState>>,
+    payload: &[u8],
+) {
+    // Parse payload as JSON with best-effort extraction
+    let (sections, toon_preview, token_count, token_budget) = if let Ok(json_str) = std::str::from_utf8(payload) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
+            let sections = json.get("sections")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let toon_preview = json.get("toon_output")
+                .and_then(|v| v.as_str())
+                .map(|s| crate::state::truncate_with_ellipsis(s, 200))
+                .unwrap_or_default();
+            let token_count = json.get("token_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let token_budget = json.get("token_budget")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            (sections, toon_preview, token_count, token_budget)
+        } else {
+            (vec![], String::new(), 0, 0)
+        }
+    } else {
+        (vec![], String::new(), 0, 0)
+    };
+
+    if let Ok(mut state) = debug_state.lock() {
+        state.push_prompt_trace(crate::state::PromptTraceEntry {
+            sections,
+            toon_output_preview: toon_preview,
+            token_count,
+            token_budget,
+            timestamp: chrono::Utc::now(),
+        });
+    }
+}
+
+async fn handle_user_message_received(
+    debug_state: &Arc<Mutex<DebugState>>,
+    payload: &[u8],
+) {
+    let content_preview = if let Ok(json_str) = std::str::from_utf8(payload) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
+            json.get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| crate::state::truncate_with_ellipsis(s, 100))
+                .unwrap_or_default()
+        } else {
+            crate::state::truncate_with_ellipsis(json_str, 100)
+        }
+    } else {
+        String::new()
+    };
+
+    if let Ok(mut state) = debug_state.lock() {
+        state.push_conversation_turn(crate::state::ConversationTurn {
+            role: "user".to_string(),
+            content_preview,
+            model_id: String::new(),
+            latency_ms: 0,
+            tokens_prompt: 0,
+            tokens_generated: 0,
+            timestamp: chrono::Utc::now(),
+        });
+    }
+}
+
+async fn handle_user_message_response(
+    debug_state: &Arc<Mutex<DebugState>>,
+    payload: &[u8],
+) {
+    let (content_preview, model_id, latency_ms, tokens_prompt, tokens_generated) =
+        if let Ok(json_str) = std::str::from_utf8(payload) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
+                let content = json.get("response")
+                    .and_then(|v| v.as_str())
+                    .map(|s| crate::state::truncate_with_ellipsis(s, 100))
+                    .unwrap_or_default();
+                let model = json.get("model_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let latency = json.get("latency_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let tp = json.get("tokens_prompt")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                let tg = json.get("tokens_generated")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                (content, model, latency, tp, tg)
+            } else {
+                (String::new(), String::new(), 0, 0, 0)
+            }
+        } else {
+            (String::new(), String::new(), 0, 0, 0)
+        };
+
+    if let Ok(mut state) = debug_state.lock() {
+        // Update inference stats from response metadata
+        if tokens_generated > 0 && latency_ms > 0 {
+            let tps = (tokens_generated as f32 / latency_ms as f32) * 1000.0;
+            state.inference_stats.tokens_per_second = tps;
+            state.inference_stats.total_completions += 1;
+            state.inference_stats.last_completion = Some(chrono::Utc::now());
+            if !model_id.is_empty() {
+                state.inference_stats.active_model = model_id.clone();
+            }
+        }
+
+        state.push_conversation_turn(crate::state::ConversationTurn {
+            role: "assistant".to_string(),
+            content_preview,
+            model_id,
+            latency_ms,
+            tokens_prompt,
+            tokens_generated,
+            timestamp: chrono::Utc::now(),
+        });
+    }
+}
+
+async fn handle_inference_model_switching(
+    debug_state: &Arc<Mutex<DebugState>>,
+    payload: &[u8],
+) {
+    if let Ok(json_str) = std::str::from_utf8(payload) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
+            let model_id = json.get("model_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("switching...")
+                .to_string();
+            let display_name = json.get("model_display_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let vram_used = json.get("vram_used_mb")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let vram_total = json.get("vram_total_mb")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+
+            if let Ok(mut state) = debug_state.lock() {
+                state.inference_stats.active_model = model_id;
+                if !display_name.is_empty() {
+                    state.inference_stats.model_display_name = display_name.to_string();
+                }
+                if vram_used > 0 {
+                    state.vram_used_mb = vram_used;
+                }
+                if vram_total > 0 {
+                    state.vram_total_mb = vram_total;
+                }
+            }
+        }
+    }
+}
+
 /// Send a chat message to the reactive loop via daemon-bus
 pub async fn send_chat_message(
     address: &str,
@@ -430,9 +761,7 @@ pub async fn signal_ui_ready(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use crate::generated::sena_daemonbus_v1::boot_service_client::BootServiceClient;
 
-    let channel = Channel::from_shared(address.to_string())?
-        .connect()
-        .await?;
+    let channel = Channel::from_shared(address.to_string())?.connect().await?;
 
     let mut client = BootServiceClient::new(channel);
 
@@ -503,5 +832,96 @@ mod tests {
         // Test invalid JSON
         let signal = extract_boot_signal_name(b"invalid");
         assert_eq!(signal, "UNKNOWN");
+    }
+
+    #[test]
+    fn test_extract_capabilities_valid_json() {
+        let json = r#"{
+            "signal": "MODEL_PROFILE_READY",
+            "capabilities": {
+                "granted": [
+                    {"label": "Text Generation"},
+                    {"label": "Context Window (8K)"}
+                ],
+                "degraded": [
+                    {"label": "Chain-of-Thought", "reason": "Model does not support think tags"}
+                ],
+                "denied": [
+                    {"label": "Vision", "reason": "No vision adapter loaded"}
+                ]
+            }
+        }"#;
+
+        let result = extract_capabilities_from_payload(json.as_bytes(), "MODEL_PROFILE_READY");
+        assert!(result.is_some());
+
+        let caps = result.unwrap();
+        assert_eq!(caps.granted.len(), 2);
+        assert_eq!(caps.granted[0].label, "Text Generation");
+        assert_eq!(caps.granted[0].reason, None);
+        assert_eq!(caps.granted[1].label, "Context Window (8K)");
+
+        assert_eq!(caps.degraded.len(), 1);
+        assert_eq!(caps.degraded[0].label, "Chain-of-Thought");
+        assert_eq!(
+            caps.degraded[0].reason,
+            Some("Model does not support think tags".to_string())
+        );
+
+        assert_eq!(caps.denied.len(), 1);
+        assert_eq!(caps.denied[0].label, "Vision");
+        assert_eq!(
+            caps.denied[0].reason,
+            Some("No vision adapter loaded".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_capabilities_no_capabilities_field() {
+        let json = r#"{"signal": "MODEL_PROFILE_READY"}"#;
+        let result = extract_capabilities_from_payload(json.as_bytes(), "MODEL_PROFILE_READY");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_capabilities_non_json() {
+        // Test with binary/protobuf-like payload
+        let binary_payload = b"\x08\x01\x12\x04test";
+        let result = extract_capabilities_from_payload(binary_payload, "MODEL_PROFILE_READY");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_capabilities_wrong_signal() {
+        let json = r#"{
+            "signal": "INFERENCE_READY",
+            "capabilities": {
+                "granted": [{"label": "Test"}]
+            }
+        }"#;
+
+        // Should return None for non-MODEL_PROFILE_READY signals
+        let result = extract_capabilities_from_payload(json.as_bytes(), "INFERENCE_READY");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_capabilities_empty_arrays() {
+        let json = r#"{
+            "signal": "MODEL_PROFILE_READY",
+            "capabilities": {
+                "granted": [],
+                "degraded": [],
+                "denied": []
+            }
+        }"#;
+
+        let result = extract_capabilities_from_payload(json.as_bytes(), "MODEL_PROFILE_READY");
+        assert!(result.is_some());
+
+        let caps = result.unwrap();
+        assert_eq!(caps.granted.len(), 0);
+        assert_eq!(caps.degraded.len(), 0);
+        assert_eq!(caps.denied.len(), 0);
     }
 }

@@ -4,6 +4,7 @@
 daemon_bus_address = "http://127.0.0.1:50051"
 inference_address = "http://127.0.0.1:50055"
 prompt_composer_address = "http://127.0.0.1:50057"
+memory_engine_address = "http://127.0.0.1:50052"
 listen_address = "0.0.0.0"
 listen_port = 50058
 connection_timeout_ms = 5000
@@ -14,7 +15,15 @@ ready_signal_timeout_ms = 5000
 [inference]
 default_max_tokens = 1024
 default_temperature = 0.7
-request_timeout_ms = 30000
+request_timeout_ms = 120000
+
+[post_processing]
+# Heartbeat tokens (empty strings sent during generation stalls) are filtered here
+filter_heartbeat_tokens = true
+# Strip reasoning markers from model output
+strip_reasoning_tags = true
+# List of markers to strip from responses
+reasoning_markers = ["***", "**Explanation:**", "**System:**", "<think>", "</think>"]
 
 [fallback]
 # Response returned when inference is unavailable.

@@ -540,6 +540,13 @@ pub struct UserMessageResponse {
     pub request_id: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "7")]
     pub assembly_trace: ::core::option::Option<PromptAssemblyTrace>,
+    /// Chain-of-thought fields
+    #[prost(string, optional, tag = "8")]
+    pub pre_thought_text: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "9")]
+    pub thought_content: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, tag = "10")]
+    pub chain_of_thought_supported: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

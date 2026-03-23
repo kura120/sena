@@ -3,6 +3,11 @@ export const STRINGS = {
   PANEL_EVENT_BUS: "Event Bus",
   PANEL_CHAT: "Chat — Debug",
   PANEL_BOOT_TIMELINE: "Boot Timeline",
+  PANEL_RESOURCES: "Resources",
+  PANEL_THOUGHT_STREAM: "Thought Stream",
+  PANEL_MEMORY_STATS: "Memory Stats",
+  PANEL_PROMPT_TRACE: "Prompt Trace",
+  PANEL_CONVERSATION_TIMELINE: "Conversation Timeline",
   
   STATUS_READY: "Ready",
   STATUS_DEGRADED: "Degraded",
@@ -12,6 +17,13 @@ export const STRINGS = {
   CHAT_EMPTY_STATE: "Send a message to start chatting",
   CHAT_TYPING: "Thinking...",
   CHAT_INPUT_PLACEHOLDER: "Type a message...",
+  CHAT_SEND: "Send message",
+  CHAT_REACTIVE_LOOP_PREFIX: "reactive-loop",
+  CHAT_ERROR_PREFIX: "Error",
+  COT_THINKING: "Thinking...",
+  COT_THOUGHT_FOR: "Thought for",
+  COT_SECONDS: "s",
+  COT_NOT_SUPPORTED: "Chain-of-thought not supported by this model",
   
   TOAST_TEMPLATE: "Press {key} to open Sena debug overlay",
   
@@ -25,4 +37,60 @@ export const STRINGS = {
   
   CONNECTING: "Connecting...",
   DISCONNECTED: "Disconnected",
+  
+  // Toast strings
+  TOAST_HOTKEY_TITLE: "Sena Debug Overlay",
+  TOAST_SENA_READY_TITLE: "Sena Ready",
+  TOAST_SENA_READY_MSG: "All subsystems online",
+  TOAST_STARTING_TITLE: "Starting Sena",
+  TOAST_STARTING_MSG: "Launching daemon-bus...",
+  TOAST_LAUNCH_FAILED_TITLE: "Launch Failed",
+  TOAST_SLOW_START_TITLE: "Slow Start",
+  TOAST_SLOW_START_MSG: "daemon-bus is taking longer than expected to start",
+  TOAST_REBOOTING_TITLE: "Rebooting",
+  TOAST_REBOOTING_MSG: "Restarting daemon-bus...",
+  TOAST_REBOOT_SUCCESS_TITLE: "Reboot Complete",
+  TOAST_REBOOT_SUCCESS_MSG: "daemon-bus restarted successfully",
+  TOAST_REBOOT_FAILED_TITLE: "Reboot Failed",
+  TOAST_NOTIFICATION_HISTORY: "Notification History",
+  TOAST_CLEAR_ALL: "Clear all",
+  TOAST_NO_NOTIFICATIONS: "No notifications yet",
+  
+  // Widget bar
+  WIDGET_BAR_SETTINGS: "Settings",
+  WIDGET_BAR_TITLE: "Panels",
+  
+  // Settings panel
+  PANEL_SETTINGS: "Settings",
+  SETTINGS_REOPEN_PANELS: "Reopen panels on toggle",
+  SETTINGS_REOPEN_PANELS_DESC: "When overlay opens, restore previously open panels",
+
+  
+  // Boot timeline capabilities
+  CAPABILITY_GRANTED: "Granted",
+  CAPABILITY_DEGRADED: "Degraded",
+  CAPABILITY_DENIED: "Denied",
+  CAPABILITY_ALL_OPERATIONAL: "All features operational",
+  CAPABILITY_NOT_STARTED: "Subsystem did not start within timeout",
+
+  PANEL_MODEL: "Models",
+  WIDGET_BAR_MODEL: "Models",
+  MODEL_ACTIVE: "Active Model",
+  MODEL_AGENTS: "Agent Assignments",
+  MODEL_LIBRARY: "Model Library",
+  MODEL_NO_ACTIVE: "No model loaded",
+  MODEL_SWITCH: "Switch",
+  MODEL_DELETE: "Delete",
+  MODEL_EXTRACT: "Extract",
+  MODEL_EXTRACTING: "Extracting...",
+  MODEL_AUTO: "auto",
+  MODEL_TAB_LOCAL: "Local",
+  MODEL_TAB_OLLAMA: "Ollama",
+  MODEL_BADGE_ACTIVE: "Active",
+  MODEL_BADGE_EXTRACTED: "Extracted",
+  MODEL_BADGE_LORA: "LoRA",
+  MODEL_BADGE_COT: "CoT",
+  MODEL_COMPLETIONS: "compl.",
+  MODEL_VRAM: "VRAM",
+  MODEL_CONFIRM_DELETE: "Are you sure you want to delete this model?",
 } as const;

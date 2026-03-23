@@ -133,15 +133,17 @@ command = "target/debug/inference.exe"
 args = []
 working_directory = "inference"
 
+# Windows-only path — omit .exe on Linux/macOS
 [supervisor.subsystems.prompt_composer]
 subsystem_id = "prompt_composer"
-command = "prompt-composer"
+command = "target/debug/prompt-composer.exe"
 args = []
 working_directory = "prompt-composer"
 
+# Windows-only path — omit .exe on Linux/macOS
 [supervisor.subsystems.reactive_loop]
 subsystem_id = "reactive_loop"
-command = "reactive-loop"
+command = "target/debug/reactive-loop.exe"
 args = []
 working_directory = "reactive-loop"
 

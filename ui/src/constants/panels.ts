@@ -4,6 +4,14 @@ export const PANEL_LABELS = {
   CHAT: "chat",
   BOOT_TIMELINE: "boot-timeline",
   TOAST: "toast",
+  RESOURCES: "resources",
+  THOUGHT_STREAM: "thought-stream",
+  MEMORY_STATS: "memory-stats",
+  PROMPT_TRACE: "prompt-trace",
+  CONVERSATION_TIMELINE: "conversation-timeline",
+  WIDGET_BAR: "widget-bar",
+  SETTINGS: "settings",
+  MODEL_PANEL: "model-panel",
 } as const;
 
 export const KNOWN_SUBSYSTEMS = [

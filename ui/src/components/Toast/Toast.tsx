@@ -1,47 +1,104 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { TOAST_TYPE_COLORS } from "../../constants/colors";
+import type { ToastData } from "../../types";
 
 interface ToastProps {
-  hotkeyLabel: string;
-  onDismiss: () => void;
+  toast: ToastData;
+  onDismiss: (id: string) => void;
 }
 
-export function Toast({ hotkeyLabel, onDismiss }: ToastProps) {
-  const [visible, setVisible] = useState(false);
+export function Toast({ toast, onDismiss }: ToastProps) {
+  const [exiting, setExiting] = useState(false);
+  const accentColor = TOAST_TYPE_COLORS[toast.toast_type] || TOAST_TYPE_COLORS.info;
+
+  const handleDismiss = useCallback(() => {
+    setExiting(true);
+    setTimeout(() => onDismiss(toast.id), 150);
+  }, [onDismiss, toast.id]);
 
   useEffect(() => {
-    // Fade in
-    requestAnimationFrame(() => setVisible(true));
-    // Auto-dismiss after 4 seconds
     const timer = setTimeout(() => {
-      setVisible(false);
-      setTimeout(onDismiss, 300); // Wait for fade-out animation
-    }, 4000);
+      handleDismiss();
+    }, toast.dismiss_ms);
     return () => clearTimeout(timer);
-  }, [onDismiss]);
+  }, [toast.dismiss_ms, handleDismiss]);
 
   return (
     <div
-      className="flex items-center gap-2 px-4 h-full text-xs transition-opacity duration-300"
+      className={exiting ? "toast-exiting" : "toast-entering"}
+      onClick={handleDismiss}
       style={{
-        opacity: visible ? 1 : 0,
+        width: 320,
+        minHeight: 72,
         background: "var(--bg-panel)",
+        backdropFilter: "blur(12px)",
         border: "1px solid var(--border)",
         borderRadius: "var(--radius)",
-        color: "var(--text-secondary)",
+        display: "flex",
+        overflow: "hidden",
+        cursor: "pointer",
+        position: "relative",
       }}
     >
-      <span>Press</span>
-      <kbd
-        className="px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold"
+      {/* Left accent bar */}
+      <div
         style={{
-          background: "var(--bg-hover)",
-          border: "1px solid var(--border)",
-          color: "var(--text-primary)",
+          width: 4,
+          background: accentColor,
+          flexShrink: 0,
+        }}
+      />
+      {/* Content */}
+      <div style={{ flex: 1, padding: "10px 12px", minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: "var(--text-primary)",
+            marginBottom: 2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {toast.title}
+        </div>
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--text-secondary)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical" as const,
+          }}
+        >
+          {toast.message}
+        </div>
+      </div>
+      {/* Progress bar */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: 4,
+          right: 0,
+          height: 3,
+          background: "transparent",
+          overflow: "hidden",
+          borderRadius: "0 0 var(--radius) 0",
         }}
       >
-        {hotkeyLabel}
-      </kbd>
-      <span>to open Sena debug overlay</span>
+        <div
+          style={{
+            height: "100%",
+            background: accentColor,
+            opacity: 0.4,
+            animation: `toast-progress ${toast.dismiss_ms}ms linear forwards`,
+          }}
+        />
+      </div>
     </div>
   );
 }

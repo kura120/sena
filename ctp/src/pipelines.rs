@@ -187,11 +187,18 @@ async fn evaluation_pipeline(
                 "thought surfaced — publishing to daemon-bus"
             );
 
+            // Serialize thought as JSON for UI consumption
+            let thought_payload = serde_json::json!({
+                "content": thought.content,
+                "relevance_score": thought.score,
+                "source": "event_bridge",
+            });
+
             let bus_event = BusEvent {
                 event_id: Uuid::new_v4().to_string(),
                 topic: EventTopic::TopicThoughtSurfaced.into(),
                 source_subsystem: "ctp".to_string(),
-                payload: thought.content.into_bytes(),
+                payload: thought_payload.to_string().into_bytes(),
                 trace_context: String::new(),
                 timestamp: chrono::Utc::now().to_rfc3339(),
             };
@@ -352,6 +359,34 @@ mod tests {
             logging: LoggingConfig {
                 level: "info".into(),
                 format: "json".into(),
+            },
+            event_bridge: EventBridgeConfig {
+                trigger_topics: vec![
+                    "TOPIC_USER_MESSAGE_RECEIVED".into(),
+                    "TOPIC_USER_MESSAGE_RESPONSE".into(),
+                    "TOPIC_MEMORY_WRITE_COMPLETED".into(),
+                ],
+                user_message: SignalWeightsConfig {
+                    urgency: 0.3,
+                    emotional_resonance: 0.5,
+                    novelty: 0.8,
+                    recurrence: 0.2,
+                    idle_curiosity: 0.1,
+                },
+                user_response: SignalWeightsConfig {
+                    urgency: 0.2,
+                    emotional_resonance: 0.4,
+                    novelty: 0.6,
+                    recurrence: 0.3,
+                    idle_curiosity: 0.2,
+                },
+                memory_write: SignalWeightsConfig {
+                    urgency: 0.1,
+                    emotional_resonance: 0.3,
+                    novelty: 0.4,
+                    recurrence: 0.5,
+                    idle_curiosity: 0.3,
+                },
             },
         }
     }

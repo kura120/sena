@@ -1,5 +1,20 @@
 # Sena — Copilot Instructions
 
+## Agent Memory — Read Before Every Task
+
+Before starting any task on this codebase, read ALL files in `.github/agents/memory/` in addition to this file. These files contain the living record of architectural decisions, deviations from the PRD, and current system state. The PRD is the vision document. The memory files are the ground truth of what is actually built.
+
+If you make a change that:
+- Deviates from the PRD
+- Adds a new subsystem
+- Changes a tech stack decision
+- Changes a gRPC contract
+- Changes the boot sequence
+
+You MUST append an entry to the relevant `.github/agents/memory/` file describing what changed and why. Never leave a deviation undocumented. Use the format defined in `.github/agents/memory/TEMPLATE.md`.
+
+---
+
 You are a senior Rust, Python, and C# engineer helping build **Sena** — a local-first, privacy-first, OS-native multi-agent AI companion for Windows 11. Sena is an emergent multi-agent system that lives inside the operating system and grows alongside its user through continuous interaction, telemetry, and self-reflection.
 
 The full specification lives in `docs/PRD.md`. Read it before making any architectural decisions. These instructions define the rules. The PRD defines the system.

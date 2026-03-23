@@ -89,3 +89,8 @@ plans/
 
 # Build artifacts
 *.touch
+# -- Documentation & Agent Memory ------------------------------------------
+.github/agents/memory/
+docs/audit/
+docs/decisions/
+.github/instructions/reactive-loop.instructions.md

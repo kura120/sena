@@ -114,16 +114,6 @@ impl InferenceEngine {
             });
         }
 
-        // Register model — always succeeds for valid input
-        self.registry
-            .register(model_id.to_string(), model_path.to_string(), vram_estimate)
-            .await?;
-
-        // Set state to Loading
-        self.registry
-            .set_state(model_id, ModelLoadState::Loading)
-            .await?;
-
         // Load the model
         match model_loader::load(
             model_id,
@@ -135,6 +125,16 @@ impl InferenceEngine {
         .await
         {
             Ok(handle) => {
+                // Register model with extracted display_name
+                self.registry
+                    .register(
+                        model_id.to_string(),
+                        model_path.to_string(),
+                        vram_estimate,
+                        handle.display_name.clone(),
+                    )
+                    .await?;
+
                 self.registry
                     .set_state(model_id, ModelLoadState::Ready)
                     .await?;
@@ -426,6 +426,14 @@ impl InferenceEngine {
                 // Step 7: Clear is_switching to false
                 self.is_switching.store(false, Ordering::SeqCst);
 
+                // Get display_name and VRAM info for logging
+                let display_name = self
+                    .registry
+                    .get_display_name(model_id)
+                    .await
+                    .unwrap_or_else(|_| model_id.to_string());
+                let vram_used_mb = self.registry.total_vram_allocated_mb().await;
+
                 // Step 8: Signal INFERENCE_READY to daemon-bus
                 let ready_request = tonic::Request::new(BootSignalRequest {
                     subsystem_id: SUBSYSTEM_ID.to_owned(),
@@ -446,6 +454,8 @@ impl InferenceEngine {
                     subsystem = SUBSYSTEM_ID,
                     event_type = "model_swap_completed",
                     model_id = model_id,
+                    model_display_name = %display_name,
+                    vram_used_mb = vram_used_mb,
                     "model swap completed successfully"
                 );
 
@@ -800,12 +810,20 @@ impl InferenceEngine {
 
         let start = Instant::now();
 
-        // Clone stream_tx for inside spawn_blocking
-        let stream_tx_clone = stream_tx.clone();
+        // Heartbeat config
+        let heartbeat_interval_ms = self.config.streaming.heartbeat_interval_ms;
+        let heartbeat_token = self.config.streaming.heartbeat_token.clone();
+
+        // Create internal channel for spawn_blocking to send tokens
+        let (internal_tx, mut internal_rx) = mpsc::channel::<
+            Result<StreamCompleteChunk, InferenceError>,
+        >(self.config.runtime.stream_channel_capacity);
+
         // Clone request_id before moving into spawn_blocking
         let request_id_for_closure = request_id.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
+        // Spawn blocking task for generation
+        let blocking_task = tokio::task::spawn_blocking(move || {
             // Create context
             let n_ctx = NonZeroU32::new(context_length).ok_or_else(|| {
                 InferenceError::InferenceExecution {
@@ -878,7 +896,7 @@ impl InferenceEngine {
                         request_id: request_id_for_closure.clone(),
                     };
                     // blocking_send: safe inside spawn_blocking, applies backpressure
-                    if stream_tx_clone.blocking_send(Ok(chunk)).is_err() {
+                    if internal_tx.blocking_send(Ok(chunk)).is_err() {
                         // Client disconnected
                     }
                     break;
@@ -903,7 +921,7 @@ impl InferenceEngine {
                     request_id: request_id_for_closure.clone(),
                 };
 
-                if stream_tx_clone.blocking_send(Ok(chunk)).is_err() {
+                if internal_tx.blocking_send(Ok(chunk)).is_err() {
                     // Client disconnected
                     break;
                 }
@@ -925,8 +943,73 @@ impl InferenceEngine {
             }
 
             Ok::<u32, InferenceError>(tokens_generated)
-        })
-        .await;
+        });
+
+        // Heartbeat forwarding loop
+        let mut heartbeat_interval =
+            tokio::time::interval(std::time::Duration::from_millis(heartbeat_interval_ms));
+        heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Consume the first immediate tick
+        heartbeat_interval.tick().await;
+
+        let heartbeat_request_id = request_id.clone();
+        loop {
+            tokio::select! {
+                // Token from blocking task
+                Some(chunk_result) = internal_rx.recv() => {
+                    // Reset the heartbeat timer by receiving a token
+                    heartbeat_interval.reset();
+
+                    match &chunk_result {
+                        Ok(chunk) => {
+                            let is_finished = chunk.finished;
+                            if stream_tx.send(chunk_result).await.is_err() {
+                                // Client disconnected
+                                tracing::debug!(
+                                    event_type = "streaming_client_disconnected",
+                                    request_id = %request_id,
+                                );
+                                break;
+                            }
+                            if is_finished {
+                                break;
+                            }
+                        }
+                        Err(_) => {
+                            // Error occurred, forward and exit
+                            let _send_result = stream_tx.send(chunk_result).await;
+                            break;
+                        }
+                    }
+                }
+                // Heartbeat triggered
+                _ = heartbeat_interval.tick() => {
+                    let heartbeat_chunk = StreamCompleteChunk {
+                        token: heartbeat_token.clone(),
+                        finished: false,
+                        request_id: heartbeat_request_id.clone(),
+                    };
+                    if stream_tx.send(Ok(heartbeat_chunk)).await.is_err() {
+                        // Client disconnected
+                        tracing::debug!(
+                            event_type = "streaming_client_disconnected_on_heartbeat",
+                            request_id = %request_id,
+                        );
+                        break;
+                    }
+                    tracing::trace!(
+                        event_type = "streaming_heartbeat_sent",
+                        request_id = %request_id,
+                    );
+                }
+                // Blocking task completed
+                else => {
+                    break;
+                }
+            }
+        }
+
+        let result = blocking_task.await;
 
         let duration = start.elapsed();
 
@@ -1239,7 +1322,10 @@ format = "json"
     async fn test_is_switching_default_false() {
         let config = test_config();
         let engine = InferenceEngine::new(config);
-        assert!(!engine.is_switching(), "New engine should not be in switching state");
+        assert!(
+            !engine.is_switching(),
+            "New engine should not be in switching state"
+        );
     }
 
     #[tokio::test]
@@ -1262,7 +1348,9 @@ format = "json"
 
         // The inflight counter should NOT be incremented since the is_switching guard fires first
         assert_eq!(
-            engine.inflight_count.load(std::sync::atomic::Ordering::SeqCst),
+            engine
+                .inflight_count
+                .load(std::sync::atomic::Ordering::SeqCst),
             0,
             "is_switching guard should prevent incrementing inflight count"
         );
@@ -1275,7 +1363,9 @@ format = "json"
 
         // inflight_count should still be 0 — proving the early check triggered
         assert_eq!(
-            engine.inflight_count.load(std::sync::atomic::Ordering::SeqCst),
+            engine
+                .inflight_count
+                .load(std::sync::atomic::Ordering::SeqCst),
             0,
             "is_switching guard should have returned before incrementing inflight count"
         );
@@ -1315,7 +1405,12 @@ format = "json"
         // Register 2 models as Ready, each taking 2048MB (4096MB total — budget filled)
         engine
             .registry
-            .register("model-old".into(), "/path/old.gguf".into(), 2048)
+            .register(
+                "model-old".into(),
+                "/path/old.gguf".into(),
+                2048,
+                "Model Old".into(),
+            )
             .await
             .expect("test: register");
         engine
@@ -1326,7 +1421,12 @@ format = "json"
 
         engine
             .registry
-            .register("model-new".into(), "/path/new.gguf".into(), 2048)
+            .register(
+                "model-new".into(),
+                "/path/new.gguf".into(),
+                2048,
+                "Model New".into(),
+            )
             .await
             .expect("test: register");
         engine
@@ -1422,7 +1522,12 @@ format = "json"
         // Register 1 model as active (no LRU candidate available)
         engine
             .registry
-            .register("active-model".into(), "/path/active.gguf".into(), 2048)
+            .register(
+                "active-model".into(),
+                "/path/active.gguf".into(),
+                2048,
+                "Active Model".into(),
+            )
             .await
             .expect("test: register");
         engine

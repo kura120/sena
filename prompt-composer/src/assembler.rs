@@ -68,6 +68,11 @@ impl PromptAssembler {
         // Build the prompt following Fixed Drop Order
         let mut builder = PromptBuilder::new(token_budget, config);
 
+        // Step 0: Add response format instruction (sacred — always included)
+        if !config.response_format.system_instruction.is_empty() {
+            builder.add_sacred("response_format", &config.response_format.system_instruction)?;
+        }
+
         // Step 1: Add sacred content (always included, never dropped)
         builder.add_sacred("soulbox_snapshot", &context.soulbox_snapshot)?;
         builder.add_sacred("user_intent", &context.user_intent)?;
@@ -421,7 +426,7 @@ fn estimate_tokens(content: &str, config: &crate::config::ContextWindowConfig) -
 mod tests {
     use super::*;
 
-    fn test_config() -> Config {
+    fn test_config() ->Config {
         Config {
             grpc: crate::config::GrpcConfig {
                 daemon_bus_address: "http://127.0.0.1:50051".into(),
@@ -438,6 +443,9 @@ mod tests {
             },
             sacred: crate::config::SacredConfig {
                 sacred_fields: vec!["soulbox_snapshot".into(), "user_intent".into()],
+            },
+            response_format: crate::config::ResponseFormatConfig {
+                system_instruction: "Respond conversationally and directly.".into(),
             },
             logging: crate::config::LoggingConfig {
                 level: "info".into(),
@@ -644,5 +652,64 @@ mod tests {
             }
             // If both are included, that's fine (budget was sufficient)
         }
+    }
+
+    #[test]
+    fn test_response_format_instruction_in_assembled_prompt() {
+        let config = test_config();
+        let assembler = PromptAssembler::new();
+
+        let context = PromptContext {
+            soulbox_snapshot: "soul".into(),
+            user_intent: "test intent".into(),
+            user_message: "hello".into(),
+            short_term: vec![],
+            long_term: vec![],
+            episodic: vec![],
+            os_context: String::new(),
+            telemetry_signals: vec![],
+            model_profile: Some(test_model_profile(8192, 1024)),
+            trace_context: String::new(),
+        };
+
+        let result = assembler.assemble(&context, &config).expect("assembly should succeed");
+
+        // Response format instruction should be in the assembled prompt
+        assert!(
+            result.assembled_prompt.contains("Respond conversationally and directly"),
+            "assembled prompt should contain response format instruction"
+        );
+        assert!(
+            result.trace.included_tiers.contains(&"response_format".to_string()),
+            "trace should track response_format as included tier"
+        );
+    }
+
+    #[test]
+    fn test_empty_response_format_skipped() {
+        let mut config = test_config();
+        config.response_format.system_instruction = String::new();
+        let assembler = PromptAssembler::new();
+
+        let context = PromptContext {
+            soulbox_snapshot: "soul".into(),
+            user_intent: "test intent".into(),
+            user_message: "hello".into(),
+            short_term: vec![],
+            long_term: vec![],
+            episodic: vec![],
+            os_context: String::new(),
+            telemetry_signals: vec![],
+            model_profile: Some(test_model_profile(8192, 1024)),
+            trace_context: String::new(),
+        };
+
+        let result = assembler.assemble(&context, &config).expect("assembly should succeed");
+
+        // Empty response format should not add a tier
+        assert!(
+            !result.trace.included_tiers.contains(&"response_format".to_string()),
+            "empty response_format should not be tracked as included tier"
+        );
     }
 }

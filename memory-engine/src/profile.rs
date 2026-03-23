@@ -271,6 +271,10 @@ mod tests {
             boot: crate::config::BootConfig {
                 ready_signal_timeout_ms: 15000,
             },
+            store: crate::config::StorePathsConfig {
+                graph_path: "data/graph.redb".to_owned(),
+                vector_path: "data/vectors.usearch".to_owned(),
+            },
             tier: crate::config::TierConfig {
                 short_term: crate::config::ShortTermTierConfig { max_entries: 256 },
                 long_term: crate::config::LongTermTierConfig { max_entries: 10000 },

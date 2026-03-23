@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { TitleBar } from "../../components/TitleBar/TitleBar";
 import { IconEventBus, IconChevronRight, IconChevronDown } from "../../components/icons";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
@@ -6,7 +7,10 @@ import { EVENT_MAX_ITEMS } from "../../constants/panels";
 import { CATEGORY_COLORS } from "../../constants/colors";
 import { STRINGS } from "../../constants/strings";
 import { BusEvent } from "../../types";
+import type { DebugSnapshot } from "../../types";
 import { formatRelativeTime } from "../../utils/time";
+import { useWindowDragSave } from "../../hooks/useWindowDragSave";
+import { useOverlayAnimation } from "../../hooks/useOverlayAnimation";
 
 function parsePayload(payload: string): Array<[string, string]> {
   try {
@@ -21,19 +25,40 @@ function parsePayload(payload: string): Array<[string, string]> {
 export function EventBus() {
   const [events, setEvents] = useState<BusEvent[]>([]);
   const [pinned, setPinned] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [, setTick] = useState(0); // Force re-render for relative times
+  const [, setTick] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  useTauriEvent<BusEvent>("bus-event", (event) => {
-    setEvents(prev => {
-      const newEvents = [...prev, event];
-      if (newEvents.length > EVENT_MAX_ITEMS) {
-        return newEvents.slice(newEvents.length - EVENT_MAX_ITEMS);
+  useWindowDragSave();
+  const panelClass = useOverlayAnimation();
+
+  // Fetch accumulated events from Rust DebugState
+  const fetchEvents = useCallback(() => {
+    invoke<DebugSnapshot>("get_debug_snapshot").then((snapshot) => {
+      if (snapshot.events.length > 0) {
+        const mapped: BusEvent[] = snapshot.events.map(e => ({
+          topic: e.topic,
+          source: e.source,
+          payload: e.payload,
+          category: "default" as BusEvent["category"],
+          timestamp: e.timestamp,
+        }));
+        setEvents(mapped.slice(-EVENT_MAX_ITEMS));
       }
-      return newEvents;
-    });
+    }).catch(() => { /* backend not ready yet */ });
+  }, []);
+
+  // Poll every 2s
+  useEffect(() => {
+    fetchEvents();
+    const interval = setInterval(fetchEvents, 2000);
+    return () => clearInterval(interval);
+  }, [fetchEvents]);
+
+  useTauriEvent("subsystems-reset", () => {
+    setEvents([]);
   });
 
   // Auto-tick for relative times
@@ -50,7 +75,7 @@ export function EventBus() {
 
   return (
     <div 
-      className="flex flex-col h-screen overflow-hidden text-sm"
+      className={`flex flex-col ${collapsed ? '' : 'h-screen'} overflow-hidden text-sm panel-glass ${panelClass}`}
       style={{
         background: "var(--bg-panel)",
         border: "1px solid var(--border)",
@@ -61,8 +86,11 @@ export function EventBus() {
         icon={<IconEventBus size={14} />} 
         title={STRINGS.PANEL_EVENT_BUS} 
         pinned={pinned} 
-        onPinToggle={() => setPinned(!pinned)} 
+        onPinToggle={() => setPinned(!pinned)}
+        collapsed={collapsed}
+        onCollapseToggle={() => setCollapsed(c => !c)}
       />
+      {!collapsed && (
       <div 
         ref={listRef}
         className="flex-1 overflow-y-auto py-1 scroll-smooth"
@@ -129,7 +157,6 @@ export function EventBus() {
                 Waiting for events...
             </div>
         )}
-      </div>
-    </div>
+      </div>      )}    </div>
   );
 }

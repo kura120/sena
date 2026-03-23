@@ -19,6 +19,10 @@ tokens_per_char_estimate = 0.25
 # Sacred content is never dropped. These identifiers match PromptContext fields.
 sacred_fields = ["soulbox_snapshot", "user_intent"]
 
+[response_format]
+# Instruction injected into the system prompt to prevent reasoning leakage
+system_instruction = "Respond conversationally and directly. Do not include meta-commentary, do not explain your reasoning process, do not use markers like *** or tags like <think>. Just give your response naturally."
+
 [logging]
 level = "info"
 format = "json"

@@ -22,6 +22,7 @@ pub struct ModelEntry {
     pub state: ModelLoadState,
     pub vram_estimate_mb: u32,
     pub last_used: Instant,
+    pub display_name: String,
 }
 
 /// Thread-safe model registry. Inner state protected by RwLock.
@@ -53,6 +54,7 @@ impl ModelRegistry {
         model_id: String,
         model_path: String,
         vram_estimate_mb: u32,
+        display_name: String,
     ) -> Result<(), InferenceError> {
         let entry = ModelEntry {
             model_id: model_id.clone(),
@@ -60,6 +62,7 @@ impl ModelRegistry {
             state: ModelLoadState::Unloaded,
             vram_estimate_mb,
             last_used: Instant::now(),
+            display_name,
         };
 
         let mut guard = self.inner.write().await;
@@ -160,6 +163,18 @@ impl ModelRegistry {
         Ok(())
     }
 
+    /// Get the display name for a model. Returns `ModelNotFound` if the model is not registered.
+    pub async fn get_display_name(&self, model_id: &str) -> Result<String, InferenceError> {
+        let guard = self.inner.read().await;
+        let entry = guard
+            .models
+            .get(model_id)
+            .ok_or_else(|| InferenceError::ModelNotFound {
+                model_id: model_id.to_string(),
+            })?;
+        Ok(entry.display_name.clone())
+    }
+
     /// Remove a model entry from the registry entirely.
     /// Frees its VRAM budget allocation and clears active_model_id if this was the active model.
     pub async fn remove(&self, model_id: &str) -> Result<(), InferenceError> {
@@ -185,7 +200,12 @@ mod tests {
     async fn test_register_model() {
         let registry = ModelRegistry::new();
         registry
-            .register("model-a".into(), "/path/a.gguf".into(), 2048)
+            .register(
+                "model-a".into(),
+                "/path/a.gguf".into(),
+                2048,
+                "Model A".into(),
+            )
             .await
             .expect("test: register should succeed");
         let state = registry
@@ -199,7 +219,7 @@ mod tests {
     async fn test_set_state_transitions() {
         let registry = ModelRegistry::new();
         registry
-            .register("m1".into(), "/p".into(), 1024)
+            .register("m1".into(), "/p".into(), 1024, "M1".into())
             .await
             .expect("test: register");
 
@@ -235,11 +255,11 @@ mod tests {
     async fn test_set_active_model() {
         let registry = ModelRegistry::new();
         registry
-            .register("a".into(), "/a".into(), 512)
+            .register("a".into(), "/a".into(), 512, "A".into())
             .await
             .expect("test: register a");
         registry
-            .register("b".into(), "/b".into(), 512)
+            .register("b".into(), "/b".into(), 512, "B".into())
             .await
             .expect("test: register b");
         registry.set_active("a").await.expect("test: set active");
@@ -262,11 +282,11 @@ mod tests {
     async fn test_lru_candidate_returns_least_recently_used() {
         let registry = ModelRegistry::new();
         registry
-            .register("old".into(), "/old".into(), 1024)
+            .register("old".into(), "/old".into(), 1024, "Old".into())
             .await
             .expect("test: register");
         registry
-            .register("new".into(), "/new".into(), 1024)
+            .register("new".into(), "/new".into(), 1024, "New".into())
             .await
             .expect("test: register");
 
@@ -299,11 +319,11 @@ mod tests {
     async fn test_total_vram_allocated() {
         let registry = ModelRegistry::new();
         registry
-            .register("a".into(), "/a".into(), 1024)
+            .register("a".into(), "/a".into(), 1024, "A".into())
             .await
             .expect("test: register");
         registry
-            .register("b".into(), "/b".into(), 2048)
+            .register("b".into(), "/b".into(), 2048, "B".into())
             .await
             .expect("test: register");
 
@@ -324,7 +344,12 @@ mod tests {
     async fn test_remove_model() {
         let registry = ModelRegistry::new();
         registry
-            .register("model-a".into(), "/path/a.gguf".into(), 2048)
+            .register(
+                "model-a".into(),
+                "/path/a.gguf".into(),
+                2048,
+                "Model A".into(),
+            )
             .await
             .expect("test: register should succeed");
 
@@ -354,7 +379,12 @@ mod tests {
     async fn test_remove_clears_active() {
         let registry = ModelRegistry::new();
         registry
-            .register("active-model".into(), "/path/active.gguf".into(), 1024)
+            .register(
+                "active-model".into(),
+                "/path/active.gguf".into(),
+                1024,
+                "Active Model".into(),
+            )
             .await
             .expect("test: register should succeed");
 
@@ -376,5 +406,36 @@ mod tests {
 
         // Verify active_model_id is cleared
         assert_eq!(registry.active_model_id().await, None);
+    }
+
+    #[tokio::test]
+    async fn test_registry_stores_display_name() {
+        let registry = ModelRegistry::new();
+        registry
+            .register(
+                "gemma-2b".into(),
+                "/models/gemma-2b.gguf".into(),
+                2048,
+                "Gemma 2.0 2B Instruct".into(),
+            )
+            .await
+            .expect("test: register should succeed");
+
+        let display_name = registry
+            .get_display_name("gemma-2b")
+            .await
+            .expect("test: get_display_name should succeed");
+        assert_eq!(display_name, "Gemma 2.0 2B Instruct");
+    }
+
+    #[tokio::test]
+    async fn test_get_display_name_not_found() {
+        let registry = ModelRegistry::new();
+        let result = registry.get_display_name("nonexistent").await;
+        assert!(result.is_err());
+        match result.expect_err("test: should be error") {
+            InferenceError::ModelNotFound { model_id } => assert_eq!(model_id, "nonexistent"),
+            other => panic!("Expected ModelNotFound, got: {other}"),
+        }
     }
 }

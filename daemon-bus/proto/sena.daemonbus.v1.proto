@@ -610,6 +610,10 @@ message UserMessageResponse {
   uint64 latency_ms = 5;
   string request_id = 6;
   PromptAssemblyTrace assembly_trace = 7;
+  // Chain-of-thought fields
+  optional string pre_thought_text = 8;
+  optional string thought_content = 9;
+  bool chain_of_thought_supported = 10;
 }
 
 service UserMessageService {

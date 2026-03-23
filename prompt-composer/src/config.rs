@@ -8,6 +8,8 @@ pub struct Config {
     pub boot: BootConfig,
     pub context_window: ContextWindowConfig,
     pub sacred: SacredConfig,
+    #[serde(default)]
+    pub response_format: ResponseFormatConfig,
     pub logging: LoggingConfig,
 }
 
@@ -36,6 +38,21 @@ pub struct ContextWindowConfig {
 pub struct SacredConfig {
     /// Field identifiers that must never be dropped (e.g., "soulbox_snapshot", "user_intent").
     pub sacred_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResponseFormatConfig {
+    /// Instruction injected into the system prompt to prevent reasoning leakage.
+    #[serde(default)]
+    pub system_instruction: String,
+}
+
+impl Default for ResponseFormatConfig {
+    fn default() -> Self {
+        Self {
+            system_instruction: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -114,6 +131,9 @@ tokens_per_char_estimate = 0.25
 
 [sacred]
 sacred_fields = ["soulbox_snapshot", "user_intent"]
+
+[response_format]
+system_instruction = "Respond conversationally and directly."
 
 [logging]
 level = "info"
@@ -217,5 +237,47 @@ format = "json"
             PromptComposerError::ConfigLoad { .. } => {}
             other => panic!("Expected ConfigLoad error, got: {other}"),
         }
+    }
+
+    #[test]
+    fn test_response_format_instruction_loaded() {
+        let file = write_temp_config(VALID_CONFIG);
+        // unwrap acceptable: this test asserts that valid config loads successfully
+        let config = Config::load(file.path()).expect("test: valid config must load");
+
+        assert!(!config.response_format.system_instruction.is_empty());
+        assert_eq!(config.response_format.system_instruction, "Respond conversationally and directly.");
+    }
+
+    #[test]
+    fn test_response_format_defaults_to_empty() {
+        let config_without_response_format = r#"
+[grpc]
+daemon_bus_address = "http://127.0.0.1:50051"
+listen_address = "0.0.0.0"
+listen_port = 50057
+connection_timeout_ms = 5000
+
+[boot]
+ready_signal_timeout_ms = 5000
+
+[context_window]
+esu_savings_threshold = 0.15
+tokens_per_char_estimate = 0.25
+
+[sacred]
+sacred_fields = ["soulbox_snapshot", "user_intent"]
+
+[logging]
+level = "info"
+format = "json"
+"#;
+
+        let file = write_temp_config(config_without_response_format);
+        // unwrap acceptable: this test asserts that config without response_format loads successfully
+        let config = Config::load(file.path()).expect("test: config without response_format must load");
+
+        // Should default to empty string
+        assert_eq!(config.response_format.system_instruction, "");
     }
 }
