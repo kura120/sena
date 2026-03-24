@@ -78,6 +78,10 @@ plans/
 **/plans/
 .sisyphus/
 
+# Agents — Personal/local only
+agents/
+**/agents/
+
 # ech0 storage
 **/data/*.redb
 **/data/*.usearch
