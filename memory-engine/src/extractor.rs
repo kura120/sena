@@ -237,6 +237,12 @@ impl Extractor for LlamaExtractor {
 /// This is an explicit, visible fallback — not a hidden default.
 pub struct DegradedExtractor;
 
+impl Default for DegradedExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DegradedExtractor {
     pub fn new() -> Self {
         tracing::warn!(

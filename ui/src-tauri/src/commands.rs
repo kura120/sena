@@ -493,10 +493,7 @@ pub async fn get_panel_states(
 
     let mut panel_states = std::collections::HashMap::new();
     for &panel_label in crate::overlay::ALL_PANELS {
-        let default_open = match panel_label {
-            "model-panel" | "settings" => false,
-            _ => true,
-        };
+        let default_open = !matches!(panel_label, "model-panel" | "settings");
         let is_open = store
             .get(panel_label)
             .and_then(|val| val.as_bool())
@@ -550,7 +547,7 @@ pub async fn get_overlay_setting(
         .store("overlay-settings.json")
         .map_err(|e| format!("Failed to access overlay settings store: {}", e))?;
 
-    let value = store.get(&key).unwrap_or_else(|| {
+    let value = store.get(&key).unwrap_or({
         // Return defaults for known settings
         match key.as_str() {
             "reopen_panels_on_toggle" => serde_json::json!(true),
@@ -690,15 +687,7 @@ fn json_to_toml_value(val: &serde_json::Value) -> Option<toml_edit::Item> {
     
     match val {
         serde_json::Value::Bool(b) => Some(value(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(value(i))
-            } else if let Some(f) = n.as_f64() {
-                Some(value(f))
-            } else {
-                None
-            }
-        }
+        serde_json::Value::Number(n) => n.as_i64().map(&value).or_else(|| n.as_f64().map(value)),
         serde_json::Value::String(s) => Some(value(s.as_str())),
         serde_json::Value::Array(arr) => {
             let mut toml_arr = Array::new();

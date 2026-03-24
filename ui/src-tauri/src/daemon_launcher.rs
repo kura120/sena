@@ -2,7 +2,7 @@ use crate::config::DaemonBusLaunchConfig;
 use crate::toast;
 use std::path::PathBuf;
 use std::process::Command;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tonic::transport::Channel;
 use tracing::{error, info, warn};
 
@@ -14,17 +14,17 @@ pub enum DaemonLaunchResult {
     /// daemon-bus was launched successfully
     Launched,
     /// Failed to find the binary
-    BinaryNotFound(String),
+    BinaryNotFound(#[allow(dead_code)] String),
     /// Launch timed out
     Timeout,
     /// Other error
-    Error(String),
+    Error(#[allow(dead_code)] String),
 }
 
 /// Check if daemon-bus is reachable by attempting a gRPC connection.
 async fn is_daemon_bus_running(address: &str, timeout_ms: u64) -> bool {
-    let result = Channel::from_shared(address.to_string()).and_then(|endpoint| {
-        Ok(endpoint.connect_timeout(std::time::Duration::from_millis(timeout_ms)))
+    let result = Channel::from_shared(address.to_string()).map(|endpoint| {
+        endpoint.connect_timeout(std::time::Duration::from_millis(timeout_ms))
     });
 
     let endpoint = match result {
@@ -33,15 +33,14 @@ async fn is_daemon_bus_running(address: &str, timeout_ms: u64) -> bool {
     };
 
     // Try to connect with a short timeout
-    match tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        endpoint.connect(),
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            endpoint.connect(),
+        )
+        .await,
+        Ok(Ok(_))
     )
-    .await
-    {
-        Ok(Ok(_)) => true,
-        _ => false,
-    }
 }
 
 /// Resolve the daemon-bus binary path relative to the workspace root.

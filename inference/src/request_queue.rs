@@ -167,6 +167,11 @@ impl RequestQueue {
     pub async fn len(&self) -> usize {
         self.inner.lock().await.len()
     }
+
+    /// Check if the queue is empty.
+    pub async fn is_empty(&self) -> bool {
+        self.inner.lock().await.is_empty()
+    }
 }
 
 #[cfg(test)]

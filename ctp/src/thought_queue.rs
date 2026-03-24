@@ -52,6 +52,12 @@ pub struct ThoughtQueue {
     notify: Notify,
 }
 
+impl Default for ThoughtQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThoughtQueue {
     pub fn new() -> Self {
         Self {

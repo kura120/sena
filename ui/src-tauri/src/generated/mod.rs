@@ -6,4 +6,5 @@
 pub mod sena_daemonbus_v1;
 
 // Re-export commonly used types
+#[allow(unused_imports)]
 pub use sena_daemonbus_v1::*;

@@ -2,7 +2,6 @@
 ///
 /// Selects between TOON and JSON encoding based on estimated token savings.
 /// Sacred content always prefers fidelity (JSON) over compression.
-
 use crate::config::ContextWindowConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -30,10 +30,10 @@ use std::time::Duration;
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 
-use crate::bus::{EventBus, InternalBusEvent};
+use crate::bus::{boot_signal_name, EventBus, InternalBusEvent};
 use crate::config::BootConfig;
 use crate::error::SenaResult;
-use crate::generated::sena_daemonbus_v1::EventTopic;
+use crate::generated::sena_daemonbus_v1::{BootSignal, EventTopic};
 use crate::supervisor::Supervisor;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -198,7 +198,8 @@ impl BootOrchestrator {
 
         // Step 1: daemon-bus signals itself as ready — it is the root of the
         // dependency graph and does not depend on anything.
-        self.signal_ready("daemon_bus", "DAEMON_BUS_READY").await?;
+        self.signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
+            .await?;
 
         // Step 2: spawn all boot-time subsystems via the supervisor.
         let spawn_list = self.inner.supervisor.boot_spawn_list();
@@ -417,7 +418,8 @@ impl BootOrchestrator {
         let _receiver_count = self.inner.event_bus.publish(InternalBusEvent::new(
             EventTopic::TopicBootSignal,
             "daemon_bus",
-            br#"{"signal":"SENA_READY"}"#.to_vec(),
+            format!(r#"{{"signal":"{}"}}"#, boot_signal_name(BootSignal::SenaReady))
+                .into_bytes(),
             "",
         ));
 
@@ -706,30 +708,30 @@ mod tests {
         subsystems.insert(
             "memory_engine".to_string(),
             BootSubsystemConfig {
-                signal: "MEMORY_ENGINE_READY".to_string(),
+                signal: boot_signal_name(BootSignal::MemoryEngineReady).to_string(),
                 skip_signal: None,
                 timeout_ms: 500,
                 required: true,
-                depends_on: vec!["DAEMON_BUS_READY".to_string()],
+                depends_on: vec![boot_signal_name(BootSignal::DaemonBusReady).to_string()],
             },
         );
 
         subsystems.insert(
             "ctp".to_string(),
             BootSubsystemConfig {
-                signal: "CTP_READY".to_string(),
+                signal: boot_signal_name(BootSignal::CtpReady).to_string(),
                 skip_signal: None,
                 timeout_ms: 500,
                 required: true,
-                depends_on: vec!["MEMORY_ENGINE_READY".to_string()],
+                depends_on: vec![boot_signal_name(BootSignal::MemoryEngineReady).to_string()],
             },
         );
 
         subsystems.insert(
             "lora_manager".to_string(),
             BootSubsystemConfig {
-                signal: "LORA_READY".to_string(),
-                skip_signal: Some("LORA_SKIPPED".to_string()),
+                signal: boot_signal_name(BootSignal::LoraReady).to_string(),
+                skip_signal: Some(boot_signal_name(BootSignal::LoraSkipped).to_string()),
                 timeout_ms: 500,
                 required: false,
                 depends_on: vec![],
@@ -760,13 +762,13 @@ mod tests {
 
         // Simulate daemon-bus ready (normally done inside run()).
         orchestrator
-            .signal_ready("daemon_bus", "DAEMON_BUS_READY")
+            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
             .await
             .expect("signal should succeed");
 
         // Signal both required subsystems.
         orchestrator
-            .signal_ready("memory_engine", "MEMORY_ENGINE_READY")
+            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
             .await
             .expect("signal should succeed");
 
@@ -776,7 +778,7 @@ mod tests {
         );
 
         orchestrator
-            .signal_ready("ctp", "CTP_READY")
+            .signal_ready("ctp", boot_signal_name(BootSignal::CtpReady))
             .await
             .expect("signal should succeed");
 
@@ -802,21 +804,21 @@ mod tests {
         let orchestrator = BootOrchestrator::new(&config, bus, supervisor);
 
         orchestrator
-            .signal_ready("daemon_bus", "DAEMON_BUS_READY")
+            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
             .await
             .expect("signal should succeed");
         orchestrator
-            .signal_ready("memory_engine", "MEMORY_ENGINE_READY")
+            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
             .await
             .expect("signal should succeed");
         orchestrator
-            .signal_ready("ctp", "CTP_READY")
+            .signal_ready("ctp", boot_signal_name(BootSignal::CtpReady))
             .await
             .expect("signal should succeed");
 
         // Use the skip signal instead of the primary signal.
         orchestrator
-            .signal_ready("lora_manager", "LORA_SKIPPED")
+            .signal_ready("lora_manager", boot_signal_name(BootSignal::LoraSkipped))
             .await
             .expect("signal should succeed");
 
@@ -880,18 +882,18 @@ mod tests {
         let orchestrator = BootOrchestrator::new(&config, bus, supervisor);
 
         orchestrator
-            .signal_ready("daemon_bus", "DAEMON_BUS_READY")
+            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
             .await
             .expect("signal should succeed");
         orchestrator.start_subsystem_timeout_watchers().await;
 
         // Signal required subsystems.
         orchestrator
-            .signal_ready("memory_engine", "MEMORY_ENGINE_READY")
+            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
             .await
             .expect("signal should succeed");
         orchestrator
-            .signal_ready("ctp", "CTP_READY")
+            .signal_ready("ctp", boot_signal_name(BootSignal::CtpReady))
             .await
             .expect("signal should succeed");
 
@@ -915,11 +917,11 @@ mod tests {
         let orchestrator = BootOrchestrator::new(&test_boot_config(), bus, supervisor);
 
         orchestrator
-            .signal_ready("daemon_bus", "DAEMON_BUS_READY")
+            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
             .await
             .expect("signal should succeed");
         orchestrator
-            .signal_ready("memory_engine", "MEMORY_ENGINE_READY")
+            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
             .await
             .expect("signal should succeed");
 
@@ -940,17 +942,17 @@ mod tests {
         let orchestrator = BootOrchestrator::new(&test_boot_config(), bus, supervisor);
 
         orchestrator
-            .signal_ready("daemon_bus", "DAEMON_BUS_READY")
+            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
             .await
             .expect("signal should succeed");
 
         // Signal memory_engine twice — second should be harmless.
         orchestrator
-            .signal_ready("memory_engine", "MEMORY_ENGINE_READY")
+            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
             .await
             .expect("first signal should succeed");
         orchestrator
-            .signal_ready("memory_engine", "MEMORY_ENGINE_READY")
+            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
             .await
             .expect("duplicate signal should succeed");
 
@@ -958,6 +960,65 @@ mod tests {
         assert_eq!(
             status.subsystem_signals.get("MEMORY_ENGINE_READY"),
             Some(&true)
+        );
+    }
+
+    #[test]
+    fn boot_signal_names_are_screaming_snake_case() {
+        // Verify all boot signal names match the expected proto enum format.
+        // This test ensures consistency between the proto definition and the
+        // generated .as_str_name() method that boot_signal_name() wraps.
+        assert_eq!(
+            boot_signal_name(BootSignal::DaemonBusReady),
+            "DAEMON_BUS_READY"
+        );
+        assert_eq!(
+            boot_signal_name(BootSignal::MemoryEngineReady),
+            "MEMORY_ENGINE_READY"
+        );
+        assert_eq!(
+            boot_signal_name(BootSignal::PlatformReady),
+            "PLATFORM_READY"
+        );
+        assert_eq!(
+            boot_signal_name(BootSignal::AgentsReady),
+            "AGENTS_READY"
+        );
+        assert_eq!(
+            boot_signal_name(BootSignal::ModelProfileReady),
+            "MODEL_PROFILE_READY"
+        );
+        assert_eq!(boot_signal_name(BootSignal::LoraReady), "LORA_READY");
+        assert_eq!(
+            boot_signal_name(BootSignal::LoraSkipped),
+            "LORA_SKIPPED"
+        );
+        assert_eq!(boot_signal_name(BootSignal::CtpReady), "CTP_READY");
+        assert_eq!(boot_signal_name(BootSignal::UiReady), "UI_READY");
+        assert_eq!(boot_signal_name(BootSignal::SenaReady), "SENA_READY");
+        assert_eq!(
+            boot_signal_name(BootSignal::InferenceReady),
+            "INFERENCE_READY"
+        );
+        assert_eq!(
+            boot_signal_name(BootSignal::InferenceUnavailable),
+            "INFERENCE_UNAVAILABLE"
+        );
+        assert_eq!(
+            boot_signal_name(BootSignal::InferenceDegraded),
+            "INFERENCE_DEGRADED"
+        );
+        assert_eq!(
+            boot_signal_name(BootSignal::SoulboxReady),
+            "SOULBOX_READY"
+        );
+        assert_eq!(
+            boot_signal_name(BootSignal::PromptComposerReady),
+            "PROMPT_COMPOSER_READY"
+        );
+        assert_eq!(
+            boot_signal_name(BootSignal::ReactiveLoopReady),
+            "REACTIVE_LOOP_READY"
         );
     }
 }

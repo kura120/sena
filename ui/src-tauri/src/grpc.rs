@@ -379,7 +379,9 @@ async fn handle_bus_event(
         Ok(EventTopic::TopicInferenceModelSwitching) => {
             handle_inference_model_switching(debug_state, &event.payload).await;
         }
-        _ => {}
+        _ => {
+            tracing::trace!(event_type = "unknown_topic", "unhandled event topic in UI bridge");
+        }
     }
 }
 

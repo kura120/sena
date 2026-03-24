@@ -232,14 +232,14 @@ The `inference` process is the single owner of all GGUF model loading, KV cache 
 LoRA hot-swap, and completion/streaming generation. No other subsystem loads a completion
 model directly. All subsystems that need completions are gRPC clients to `InferenceService`.
 
-**Embedding model:** memory-engine loads a dedicated small embedding GGUF in-process via
+**Embedding model:** memory-engine loads a dedicated small GGUF-compatible embedding model in-process via
 llama-cpp-rs (e.g. nomic-embed-text-v1.5 Q4, ~300MB VRAM). This is separate from the
 completion model and never shared with other subsystems. The split allows zero-latency
 in-process embeddings while keeping the completion model under unified ownership.
 
 **VRAM budget (Low tier — GTX 1660 Ti / 6GB):**
 - Completion model (7B Q4):     ~4.3GB
-- Embedding model (nomic Q4):   ~0.3GB
+- Embedding model (GGUF Q4):    ~0.3GB
 - System overhead:              ~0.2GB
 - Headroom:                     ~1.2GB
 
@@ -605,11 +605,10 @@ All proactive outputs pass through the thought queue before surfacing. The thoug
 ### 7.3 Prompt Composer (PC)
 The Prompt Composer is a first-class extractable subsystem that sits between CTP and the model. Every model call is preceded by PC assembling a fully dynamic, fully reasoned prompt. No prompts are hardcoded or pre-made.
 
-#### Serialization — TOON
-All structured data fed into PC is encoded using TOON (Token-Oriented Object Notation)
-before injection into the model. TOON is an external open-source standard by the
-toon-format organization (22k stars). Sena uses the official `toon-format` Rust crate
-directly — it is a `cargo add`, not a custom implementation.
+#### Serialization — TOON and Dynamic Encoding Selection
+Structured data fed into PC is encoded using TOON (Token-Oriented Object Notation) or JSON, determined at runtime by the Encoding Selection Utility (ESU). The ESU acts as a dynamic selector to maximize token efficiency while preserving required fidelity.
+
+TOON is an external open-source standard by the toon-format organization (22k stars). Sena uses the official `toon-format` Rust crate directly.
 
 TOON benchmarks vs JSON:
 - Token reduction: 30-60%
@@ -622,9 +621,9 @@ states, telemetry signals, and SoulBox snapshots are all uniform structured arra
 #### Three-Way Serialization Split
 | Format | Used For |
 |---|---|
-| TOON | All prompt data fed into PC and the model |
+| TOON | Structured prompt data where token savings > 15% vs JSON |
 | TOML | Config files, SoulBox definitions, agent manifests (human-edited) |
-| JSON | Internal non-uniform data structures where TOON offers no advantage |
+| JSON | Internal non-uniform data structures and fallback when TOON savings < 15% |
 
 #### PC Inputs (assembled by CTP)
 - SoulBox state snapshot — who Sena is right now
@@ -825,12 +824,17 @@ Memory is a dual-mode concurrent system — it is never idle. It is read and wri
 | SoulBox | Reads and writes on evolution events |
 | Agents | Read during task execution |
 
-### 8.2 Memory Tiers
-- Short-term — current session context, volatile
-- Long-term — persistent facts, preferences, patterns
-- Episodic — notable interaction events that shaped Sena's evolution
+### 8.2 Memory Tiers and Promotion Logic
+Memory is organized into a tiered hierarchy based on retrieval latency and semantic relevance. The movement of information between tiers is not a background storage task, but a cognitive reasoning process managed by CTP.
 
-Memory is weighted — frequently referenced memories carry more influence over time.
+| Tier | Format | Latency | Promotion Rule |
+|---|---|---|---|
+| Short-term | In-memory (L1) | < 1ms | Active session context; volatile. |
+| Mid-term | Vector DB (L2) | < 50ms | CTP-driven; consolidated from L1 via reasoning. |
+| Long-term | Graph/Relational (L3) | < 500ms | CTP-driven; persistent facts and SoulBox anchors. |
+
+#### Reasoning-Driven Promotion
+Unlike standard cache-eviction systems, Sena uses **Reasoning-Driven Promotion**. CTP evaluates the "Soul Significance" of short-term interactions. If an interaction contains a new user preference, a significant emotional beat, or a recurring pattern, CTP explicitly issues a `PromoteMemory` RPC to move the data from L1 to L2/L3.
 
 ### 8.3 Concurrency Model
 The memory engine owns its own concurrency internally. The daemon-bus is never involved in memory coordination — it only receives broadcast events after memory state changes.
@@ -1509,10 +1513,10 @@ Every subsystem ships with its own test suite. The following testing strategies 
 - [x] ech0 — local-first knowledge graph memory crate
 - [x] memory-engine — concurrent tiered memory, ech0 integration, MemoryService gRPC
 - [x] inference — llama-cpp-rs ownership, InferenceService gRPC, OOM handling, model registry
-- [ ] CTP — continuous thought loop, relevance evaluator, thought queue, memory consolidation
+- [x] CTP — continuous thought loop, relevance evaluator, thought queue, memory consolidation
 
 **Debug UI — built immediately after Milestone A**
-- [ ] Debug UI (Tauri) — subsystem health, VRAM allocations, CTP thought stream live feed, memory tier stats, event bus monitor, inference token/s
+- [x] Debug UI (Tauri) — subsystem health, VRAM allocations, CTP thought stream live feed, memory tier stats, event bus monitor, inference token/s
 - Rationale: built here so Milestone B and beyond are developed with full observability. Grows with each milestone.
 
 **Milestone B — Sena can be spoken to**

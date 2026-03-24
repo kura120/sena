@@ -34,7 +34,9 @@ pub fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
                 info!("Quit requested from system tray");
                 app_handle.exit(0);
             }
-            _ => {}
+            _ => {
+                tracing::trace!(menu_id = ?event.id(), "unhandled tray menu action");
+            }
         })
         .build(app)?;
 

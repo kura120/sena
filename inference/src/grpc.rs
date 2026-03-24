@@ -10,9 +10,12 @@ use tonic::{Request, Response, Status};
 
 use crate::generated::sena_daemonbus_v1::{
     inference_service_server::InferenceService, ActivationRequest, ActivationResponse,
-    CompleteRequest, CompleteResponse, SteeringAck, SteeringRequest, StreamCompleteChunk,
+    CompleteRequest, CompleteResponse, ListModelsRequest, ListModelsResponse, LoadModelRequest,
+    LoadModelResponse, ModelInfo, SteeringAck, SteeringRequest, StreamCompleteChunk,
+    UnloadModelRequest, UnloadModelResponse,
 };
 use crate::inference_engine::InferenceEngine;
+use crate::model_registry::ModelLoadState;
 use crate::request_queue::Priority;
 
 /// gRPC service implementation wrapping the inference engine.
@@ -52,14 +55,14 @@ impl InferenceService for InferenceGrpcService {
                 priority,
             )
             .await
-            .map_err(|e| tonic::Status::from(e))?;
+            .map_err(tonic::Status::from)?;
 
         // Await the inference result
         let result = receiver.await.map_err(|_recv_error| {
             Status::internal("inference worker dropped the response channel")
         })?;
 
-        let response = result.map_err(|e| tonic::Status::from(e))?;
+        let response = result.map_err(tonic::Status::from)?;
         Ok(Response::new(response))
     }
 
@@ -90,13 +93,13 @@ impl InferenceService for InferenceGrpcService {
                 priority,
             )
             .await
-            .map_err(|e| tonic::Status::from(e))?;
+            .map_err(tonic::Status::from)?;
 
         // Convert InferenceError to tonic::Status in the stream
         let (tx, rx) = tokio::sync::mpsc::channel(32);
         tokio::spawn(async move {
             while let Some(result) = receiver.recv().await {
-                let mapped = result.map_err(|e| tonic::Status::from(e));
+                let mapped = result.map_err(tonic::Status::from);
                 if tx.send(mapped).await.is_err() {
                     // Client disconnected
                     break;
@@ -131,6 +134,157 @@ impl InferenceService for InferenceGrpcService {
             "Steer is reserved for Phase 3"
         );
         Err(Status::unimplemented("Steer is reserved for Phase 3"))
+    }
+
+    async fn list_models(
+        &self,
+        _request: Request<ListModelsRequest>,
+    ) -> Result<Response<ListModelsResponse>, Status> {
+        let models = self.engine.registry().list_all().await;
+
+        let model_infos: Vec<ModelInfo> = models
+            .into_iter()
+            .map(|entry| {
+                let status = match entry.state {
+                    ModelLoadState::Unloaded => "unloaded",
+                    ModelLoadState::Loading => "loading",
+                    ModelLoadState::Ready => "ready",
+                    ModelLoadState::Failed(_) => "failed",
+                    ModelLoadState::Switching => "switching",
+                };
+
+                ModelInfo {
+                    model_id: entry.model_id,
+                    status: status.to_string(),
+                    path: entry.model_path,
+                    vram_usage_mb: entry.vram_estimate_mb as u64,
+                    display_name: entry.display_name,
+                }
+            })
+            .collect();
+
+        tracing::debug!(
+            event_type = "list_models_completed",
+            model_count = model_infos.len(),
+            "listed all models from registry"
+        );
+
+        Ok(Response::new(ListModelsResponse {
+            models: model_infos,
+        }))
+    }
+
+    async fn load_model(
+        &self,
+        request: Request<LoadModelRequest>,
+    ) -> Result<Response<LoadModelResponse>, Status> {
+        let req = request.into_inner();
+
+        // Validate model_path exists
+        let model_path = std::path::Path::new(&req.model_path);
+        if !model_path.exists() {
+            tracing::warn!(
+                event_type = "load_model_path_not_found",
+                path = %req.model_path,
+                "model path does not exist"
+            );
+            return Err(Status::not_found(format!(
+                "model path does not exist: {}",
+                req.model_path
+            )));
+        }
+
+        // Derive model_id from filename if not provided
+        let model_id = if req.model_id.is_empty() {
+            model_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown-model")
+                .to_string()
+        } else {
+            req.model_id.clone()
+        };
+
+        // Initialize llama backend (required for load_model)
+        let backend = Arc::new(llama_cpp_2::llama_backend::LlamaBackend::init().map_err(
+            |e| Status::internal(format!("failed to initialize llama backend: {}", e)),
+        )?);
+
+        // Attempt to load the model
+        let load_result = self
+            .engine
+            .load_model(
+                &model_id,
+                &req.model_path,
+                req.gpu_layers,
+                backend,
+            )
+            .await;
+
+        match load_result {
+            Ok(()) => {
+                tracing::info!(
+                    event_type = "model_loaded_via_rpc",
+                    model_id = %model_id,
+                    path = %req.model_path,
+                    gpu_layers = req.gpu_layers,
+                    "model loaded successfully via LoadModel RPC"
+                );
+
+                Ok(Response::new(LoadModelResponse {
+                    model_id,
+                    status: "ready".to_string(),
+                    error_message: String::new(),
+                }))
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                tracing::error!(
+                    event_type = "model_load_failed_via_rpc",
+                    model_id = %model_id,
+                    path = %req.model_path,
+                    error = %error_msg,
+                    "model load failed via LoadModel RPC"
+                );
+
+                // Return error as tonic::Status
+                Err(Status::from(e))
+            }
+        }
+    }
+
+    async fn unload_model(
+        &self,
+        request: Request<UnloadModelRequest>,
+    ) -> Result<Response<UnloadModelResponse>, Status> {
+        let req = request.into_inner();
+
+        let unload_result = self.engine.unload_model(&req.model_id).await;
+
+        match unload_result {
+            Ok(()) => {
+                tracing::info!(
+                    event_type = "model_unloaded_via_rpc",
+                    model_id = %req.model_id,
+                    "model unloaded successfully via UnloadModel RPC"
+                );
+
+                Ok(Response::new(UnloadModelResponse {
+                    success: true,
+                    message: format!("model '{}' unloaded successfully", req.model_id),
+                }))
+            }
+            Err(e) => {
+                tracing::error!(
+                    event_type = "model_unload_failed_via_rpc",
+                    model_id = %req.model_id,
+                    error = %e,
+                    "model unload failed via UnloadModel RPC"
+                );
+
+                Err(Status::from(e))
+            }
+        }
     }
 }
 
@@ -309,5 +463,49 @@ format = "json"
         let result = service.complete(second_req).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), tonic::Code::ResourceExhausted);
+    }
+
+    #[tokio::test]
+    async fn test_list_models_empty() {
+        let service = InferenceGrpcService::new(test_engine());
+        let request = Request::new(crate::generated::sena_daemonbus_v1::ListModelsRequest {});
+        let result = service.list_models(request).await;
+        
+        assert!(result.is_ok());
+        let response = result.unwrap(); // test: just confirmed is_ok
+        assert_eq!(response.into_inner().models.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_load_model_validates_path() {
+        let service = InferenceGrpcService::new(test_engine());
+        let request = Request::new(crate::generated::sena_daemonbus_v1::LoadModelRequest {
+            model_path: "/nonexistent/invalid/path.gguf".into(),
+            model_id: "test-model".into(),
+            gpu_layers: 0,
+        });
+        
+        let result = service.load_model(request).await;
+        assert!(result.is_err());
+        let status = result.unwrap_err(); // test: just confirmed is_err
+        // Should return NotFound or Internal for invalid path
+        assert!(
+            status.code() == tonic::Code::NotFound || status.code() == tonic::Code::Internal,
+            "Expected NotFound or Internal, got {:?}",
+            status.code()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unload_model_not_found() {
+        let service = InferenceGrpcService::new(test_engine());
+        let request = Request::new(crate::generated::sena_daemonbus_v1::UnloadModelRequest {
+            model_id: "nonexistent-model-id".into(),
+        });
+        
+        let result = service.unload_model(request).await;
+        assert!(result.is_err());
+        let status = result.unwrap_err(); // test: just confirmed is_err
+        assert_eq!(status.code(), tonic::Code::NotFound);
     }
 }

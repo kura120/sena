@@ -475,15 +475,15 @@ async fn wait_for_daemon_bus_ready(
         loop {
             match stream.message().await {
                 Ok(Some(bus_event)) => {
-                    if bus_event.topic == i32::from(EventTopic::TopicBootSignal) {
-                        if bus_event.source_subsystem == "daemon_bus" {
-                            tracing::debug!(
-                                subsystem = SUBSYSTEM_ID,
-                                event_type = "daemon_bus_ready_signal",
-                                "received DAEMON_BUS_READY signal"
-                            );
-                            return Ok(());
-                        }
+                    if bus_event.topic == i32::from(EventTopic::TopicBootSignal)
+                        && bus_event.source_subsystem == "daemon_bus"
+                    {
+                        tracing::debug!(
+                            subsystem = SUBSYSTEM_ID,
+                            event_type = "daemon_bus_ready_signal",
+                            "received DAEMON_BUS_READY signal"
+                        );
+                        return Ok(());
                     }
                 }
                 Ok(None) => {

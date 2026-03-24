@@ -41,18 +41,11 @@ pub struct SacredConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[derive(Default)]
 pub struct ResponseFormatConfig {
     /// Instruction injected into the system prompt to prevent reasoning leakage.
     #[serde(default)]
     pub system_instruction: String,
-}
-
-impl Default for ResponseFormatConfig {
-    fn default() -> Self {
-        Self {
-            system_instruction: String::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

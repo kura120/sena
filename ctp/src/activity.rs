@@ -62,6 +62,13 @@ pub trait ActivityDetector: Send + Sync + 'static {
 pub struct WindowsActivityDetector;
 
 #[cfg(target_os = "windows")]
+impl Default for WindowsActivityDetector {
+    fn default() -> Self {
+        Self
+    }
+}
+
+#[cfg(target_os = "windows")]
 impl WindowsActivityDetector {
     pub fn new() -> Self {
         Self
@@ -132,6 +139,12 @@ pub fn create_platform_detector() -> Arc<dyn ActivityDetector> {
 /// atomic — never calls Win32 directly.
 pub struct ActivityMonitor {
     cached_state: Arc<AtomicU8>,
+}
+
+impl Default for ActivityMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ActivityMonitor {

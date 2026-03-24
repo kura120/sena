@@ -37,6 +37,12 @@ struct RegistryInner {
     active_model_id: Option<String>,
 }
 
+impl Default for ModelRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ModelRegistry {
     /// Create a new empty model registry.
     pub fn new() -> Self {
@@ -189,6 +195,12 @@ impl ModelRegistry {
             guard.active_model_id = None;
         }
         Ok(())
+    }
+
+    /// List all registered models and their metadata.
+    pub async fn list_all(&self) -> Vec<ModelEntry> {
+        let guard = self.inner.read().await;
+        guard.models.values().cloned().collect()
     }
 }
 

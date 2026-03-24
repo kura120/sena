@@ -136,7 +136,7 @@ impl ContextAssembler {
             limit: self.memory_query_limit,
             min_score: self.memory_min_score,
             priority: priority.to_string(),
-            trace_context: String::new(), // TODO: propagate from caller when tracing is wired
+            trace_context: uuid::Uuid::new_v4().to_string(),
         });
         
         let response = match client.read(request).await {

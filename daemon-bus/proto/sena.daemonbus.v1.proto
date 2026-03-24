@@ -468,15 +468,71 @@ message SteeringAck {
   string request_id = 2;
 }
 
+// Model management messages.
+message ListModelsRequest {}
+
+message ModelInfo {
+  // Unique identifier for the model.
+  string model_id = 1;
+  // Current load state: "unloaded", "loading", "ready", "failed", "switching".
+  string status = 2;
+  // File path to the GGUF model.
+  string path = 3;
+  // VRAM usage in MB.
+  uint64 vram_usage_mb = 4;
+  // Display name extracted from GGUF metadata.
+  string display_name = 5;
+}
+
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+}
+
+message LoadModelRequest {
+  // Path to the GGUF model file to load.
+  string model_path = 1;
+  // Optional model ID. If empty, derived from filename.
+  string model_id = 2;
+  // Number of GPU layers to offload. 0 means CPU-only.
+  uint32 gpu_layers = 3;
+}
+
+message LoadModelResponse {
+  // The model ID that was loaded (derived from filename if not provided).
+  string model_id = 1;
+  // Load status: "ready" or "failed".
+  string status = 2;
+  // Error message if status is "failed".
+  string error_message = 3;
+}
+
+message UnloadModelRequest {
+  // The model ID to unload.
+  string model_id = 1;
+}
+
+message UnloadModelResponse {
+  // Whether the unload succeeded.
+  bool success = 1;
+  // Message describing success or failure reason.
+  string message = 2;
+}
+
 service InferenceService {
   // Run a full completion. Blocks until generation is complete.
   rpc Complete(CompleteRequest) returns (CompleteResponse);
   // Run a streamed completion. Server pushes one chunk per token.
   rpc StreamComplete(CompleteRequest) returns (stream StreamCompleteChunk);
-  // Read transformer layer activations. Phase 2 â€” stub only; not yet implemented.
+  // Read transformer layer activations. Phase 2 — stub only; not yet implemented.
   rpc ReadActivations(ActivationRequest) returns (ActivationResponse);
-  // Apply a steering vector during generation. Phase 3 â€” stub only; not yet implemented.
+  // Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
   rpc Steer(SteeringRequest) returns (SteeringAck);
+  // List all registered models and their states.
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  // Load a model into memory.
+  rpc LoadModel(LoadModelRequest) returns (LoadModelResponse);
+  // Unload a model from memory.
+  rpc UnloadModel(UnloadModelRequest) returns (UnloadModelResponse);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

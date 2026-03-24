@@ -41,6 +41,8 @@ pub struct InferenceConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PostProcessingConfig {
+    /// Reserved for future heartbeat token filtering
+    #[allow(dead_code)]
     pub filter_heartbeat_tokens: bool,
     #[serde(default)]
     pub strip_reasoning_tags: bool,
@@ -139,7 +141,7 @@ daemon_bus_address = "http://127.0.0.1:50051"
 inference_address = "http://127.0.0.1:50055"
 prompt_composer_address = "http://127.0.0.1:50057"
 memory_engine_address = "http://127.0.0.1:50052"
-listen_address = "0.0.0.0"
+listen_address = "127.0.0.1"
 listen_port = 50058
 connection_timeout_ms = 5000
 
@@ -201,7 +203,7 @@ daemon_bus_address = "http://127.0.0.1:50051"
 inference_address = "http://127.0.0.1:50055"
 prompt_composer_address = "http://127.0.0.1:50057"
 memory_engine_address = "http://127.0.0.1:50052"
-listen_address = "0.0.0.0"
+listen_address = "127.0.0.1"
 listen_port = 0
 connection_timeout_ms = 5000
 
@@ -242,7 +244,7 @@ daemon_bus_address = "http://127.0.0.1:50051"
 inference_address = "http://127.0.0.1:50055"
 prompt_composer_address = "http://127.0.0.1:50057"
 memory_engine_address = "http://127.0.0.1:50052"
-listen_address = "0.0.0.0"
+listen_address = "127.0.0.1"
 listen_port = 50058
 connection_timeout_ms = 5000
 
@@ -283,7 +285,7 @@ daemon_bus_address = "http://127.0.0.1:50051"
 inference_address = "http://127.0.0.1:50055"
 prompt_composer_address = "http://127.0.0.1:50057"
 memory_engine_address = "http://127.0.0.1:50052"
-listen_address = "0.0.0.0"
+listen_address = "127.0.0.1"
 listen_port = 50058
 connection_timeout_ms = 5000
 
@@ -324,7 +326,7 @@ daemon_bus_address = "http://127.0.0.1:50051"
 inference_address = "http://127.0.0.1:50055"
 prompt_composer_address = "http://127.0.0.1:50057"
 memory_engine_address = "http://127.0.0.1:50052"
-listen_address = "0.0.0.0"
+listen_address = "127.0.0.1"
 listen_port = 50058
 connection_timeout_ms = 5000
 
@@ -393,7 +395,7 @@ daemon_bus_address = "http://127.0.0.1:50051"
 inference_address = "http://127.0.0.1:50055"
 prompt_composer_address = "http://127.0.0.1:50057"
 memory_engine_address = "http://127.0.0.1:50052"
-listen_address = "0.0.0.0"
+listen_address = "127.0.0.1"
 listen_port = 50058
 connection_timeout_ms = 5000
 

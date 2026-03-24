@@ -265,6 +265,7 @@ mod tests {
         Config {
             grpc: crate::config::GrpcConfig {
                 daemon_bus_address: "http://127.0.0.1:50051".to_owned(),
+                listen_address: "127.0.0.1".to_owned(),
                 listen_port: 50053,
                 connect_timeout_ms: 5000,
             },

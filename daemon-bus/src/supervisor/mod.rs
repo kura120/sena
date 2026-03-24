@@ -772,11 +772,12 @@ impl Supervisor {
         // Gather everything we need before releasing the lock.
         // Handles are NOT aborted yet — we abort in Phase 2 so we can still
         // collect them here without consuming.
-        let shutdown_targets: Vec<(
+        type ShutdownTarget = (
             String,
             Option<JoinHandle<()>>,
             Arc<TokioMutex<Option<tokio::process::Child>>>,
-        )>;
+        );
+        let shutdown_targets: Vec<ShutdownTarget>;
         {
             let mut processes = self.inner.processes.write().await;
             shutdown_targets = processes

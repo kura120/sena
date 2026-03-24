@@ -41,7 +41,7 @@ fn skip_gguf_value(reader: &mut (impl Read + Seek), value_type: u32) -> io::Resu
     match value_type {
         0 | 1 | 7 => { reader.seek(SeekFrom::Current(1))?; }  // u8, i8, bool
         2 | 3 => { reader.seek(SeekFrom::Current(2))?; }      // u16, i16
-        4 | 5 | 6 => { reader.seek(SeekFrom::Current(4))?; }  // u32, i32, f32
+        4..=6 => { reader.seek(SeekFrom::Current(4))?; }  // u32, i32, f32
         8 => { read_gguf_string(reader)?; }                     // string
         9 => {                                                    // array
             let elem_type = read_u32(reader)?;
@@ -54,7 +54,7 @@ fn skip_gguf_value(reader: &mut (impl Read + Seek), value_type: u32) -> io::Resu
                 skip_gguf_value(reader, elem_type)?;
             }
         }
-        10 | 11 | 12 => { reader.seek(SeekFrom::Current(8))?; } // u64, i64, f64
+        10..=12 => { reader.seek(SeekFrom::Current(8))?; } // u64, i64, f64
         _ => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("Unknown value type: {}", value_type))),
     }
     Ok(())
@@ -75,7 +75,7 @@ pub fn parse_gguf_metadata(path: &Path) -> io::Result<GgufMetadata> {
     
     // Read version
     let version = read_u32(&mut file)?;
-    if version < 2 || version > 3 {
+    if !(2..=3).contains(&version) {
         return Err(io::Error::new(io::ErrorKind::InvalidData, format!("Unsupported GGUF version: {}", version)));
     }
     

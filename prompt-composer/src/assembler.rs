@@ -20,6 +20,12 @@ pub struct AssemblyResult {
 /// Stateless prompt assembler.
 pub struct PromptAssembler;
 
+impl Default for PromptAssembler {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl PromptAssembler {
     pub fn new() -> Self {
         Self
@@ -254,9 +260,12 @@ impl<'a> PromptBuilder<'a> {
 
         // Sort by relevance score (highest first)
         let mut sorted_entries = entries.to_vec();
-        // unwrap acceptable: relevance_score is f32; partial_cmp returns None only for NaN,
-        // which should never occur in valid relevance scores from the context provider.
-        sorted_entries.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap());
+        // NaN scores treated as equal to prevent panic
+        sorted_entries.sort_by(|a, b| {
+            b.relevance_score
+                .partial_cmp(&a.relevance_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut tier_content = Vec::new();
         let mut tier_tokens = 0u32;
@@ -329,9 +338,12 @@ impl<'a> PromptBuilder<'a> {
 
         // Sort by relevance score (highest first)
         let mut sorted_signals = signals.to_vec();
-        // unwrap acceptable: relevance_score is f32; partial_cmp returns None only for NaN,
-        // which should never occur in valid relevance scores from telemetry signals.
-        sorted_signals.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap());
+        // NaN scores treated as equal to prevent panic
+        sorted_signals.sort_by(|a, b| {
+            b.relevance_score
+                .partial_cmp(&a.relevance_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut telemetry_content = Vec::new();
         let mut telemetry_tokens = 0u32;
@@ -711,5 +723,53 @@ mod tests {
             !result.trace.included_tiers.contains(&"response_format".to_string()),
             "empty response_format should not be tracked as included tier"
         );
+    }
+
+    #[test]
+    fn test_sort_does_not_panic_with_nan_score() {
+        let config = test_config();
+        let assembler = PromptAssembler::new();
+
+        // Create context with NaN relevance scores in both memory entries and telemetry signals
+        let context = PromptContext {
+            soulbox_snapshot: "soul".into(),
+            user_intent: "intent".into(),
+            user_message: "hello".into(),
+            short_term: vec![
+                PromptContextEntry {
+                    id: "nan_entry".into(),
+                    content: "entry with NaN score".into(),
+                    relevance_score: f32::NAN,
+                    tier: "short_term".into(),
+                },
+                PromptContextEntry {
+                    id: "valid_entry".into(),
+                    content: "entry with valid score".into(),
+                    relevance_score: 0.9,
+                    tier: "short_term".into(),
+                },
+            ],
+            long_term: vec![],
+            episodic: vec![],
+            os_context: String::new(),
+            telemetry_signals: vec![
+                TelemetrySignal {
+                    signal_type: "cpu".into(),
+                    value: "50%".into(),
+                    relevance_score: f32::NAN,
+                },
+                TelemetrySignal {
+                    signal_type: "memory".into(),
+                    value: "80%".into(),
+                    relevance_score: 0.7,
+                },
+            ],
+            model_profile: Some(test_model_profile(8192, 1024)),
+            trace_context: String::new(),
+        };
+
+        // This should not panic even with NaN scores
+        let result = assembler.assemble(&context, &config);
+        assert!(result.is_ok(), "assembly should succeed even with NaN relevance scores");
     }
 }

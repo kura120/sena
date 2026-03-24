@@ -421,7 +421,7 @@ async fn signal_model_profile_ready(
         topic: EventTopic::TopicBootSignal.into(),
         source_subsystem: "model-probe".to_string(),
         payload: payload_bytes,
-        trace_context: String::new(), // TODO(implementation): propagate OTel trace context
+        trace_context: uuid::Uuid::new_v4().to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
 

@@ -116,7 +116,7 @@ where
                     .metadata
                     .get("tier")
                     .and_then(|value| value.as_str())
-                    .unwrap_or_else(|| match scored_node.node.kind.as_str() {
+                    .unwrap_or(match scored_node.node.kind.as_str() {
                         "working" | "short_term" | "session" => "short_term",
                         "event" | "episode" => "episodic",
                         _ => "long_term",
@@ -164,6 +164,7 @@ where
 
 // ── Parse helpers ─────────────────────────────────────────────────────────────
 
+#[allow(clippy::result_large_err)]
 fn parse_tier(tier_str: &str) -> Result<TargetTier, Status> {
     match tier_str {
         "short_term" => Ok(TargetTier::ShortTerm),
@@ -176,6 +177,7 @@ fn parse_tier(tier_str: &str) -> Result<TargetTier, Status> {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_priority(priority_str: &str) -> Result<Priority, Status> {
     match priority_str {
         "reactive" => Ok(Priority::Reactive),

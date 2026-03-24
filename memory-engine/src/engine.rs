@@ -186,7 +186,7 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
         self.queue
             .submit(text_for_queue, priority)
             .await
-            .map_err(|queue_error| {
+            .inspect_err(|queue_error| {
                 let duration_ms = start.elapsed().as_millis() as u64;
                 tracing::warn!(
                     subsystem = "memory_engine",
@@ -197,7 +197,6 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
                     error_code = %queue_error.code,
                     "write failed during queue submission"
                 );
-                queue_error
             })?;
 
         // Generate an entry ID for tier bookkeeping.

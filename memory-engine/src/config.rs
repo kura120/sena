@@ -92,6 +92,9 @@ pub struct StorePathsConfig {
 pub struct GrpcConfig {
     /// Address of the daemon-bus gRPC server (e.g. `http://127.0.0.1:50051`).
     pub daemon_bus_address: String,
+    /// Address on which memory-engine binds its own MemoryService gRPC server.
+    /// Should be "127.0.0.1" for localhost-only access.
+    pub listen_address: String,
     /// Port on which memory-engine serves its own MemoryService gRPC server.
     pub listen_port: u16,
     /// Maximum time in milliseconds to wait for the initial daemon-bus connection.
@@ -246,6 +249,7 @@ mod tests {
     const VALID_TOML: &str = r#"
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
+listen_address = "127.0.0.1"
 listen_port = 50053
 connect_timeout_ms = 5000
 
@@ -308,6 +312,7 @@ slow_operation_threshold_ms = 100
         let config = Config::load(&config_path).expect("config should load");
 
         assert_eq!(config.grpc.daemon_bus_address, "http://127.0.0.1:50051");
+        assert_eq!(config.grpc.listen_address, "127.0.0.1");
         assert_eq!(config.grpc.listen_port, 50053);
         assert_eq!(config.grpc.connect_timeout_ms, 5000);
         assert_eq!(config.boot.ready_signal_timeout_ms, 15000);

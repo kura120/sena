@@ -72,10 +72,8 @@ pub async fn run(
             "retention test at fraction"
         );
 
-        if passed {
-            if *fraction > highest_passing_fraction {
-                highest_passing_fraction = *fraction;
-            }
+        if passed && *fraction > highest_passing_fraction {
+            highest_passing_fraction = *fraction;
         }
     }
 

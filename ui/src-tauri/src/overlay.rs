@@ -483,13 +483,13 @@ pub fn create_notification_history_window(
         window.show().map_err(|e| {
             let msg = format!("Failed to show notification history: {}", e);
             error!(error = %e, "failed to show notification history");
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, msg))
+            Box::new(std::io::Error::other(msg))
                 as Box<dyn std::error::Error>
         })?;
         window.set_focus().map_err(|e| {
             let msg = format!("Failed to focus notification history: {}", e);
             error!(error = %e, "failed to focus notification history");
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, msg))
+            Box::new(std::io::Error::other(msg))
                 as Box<dyn std::error::Error>
         })?;
         return Ok(());
@@ -533,6 +533,7 @@ pub fn create_notification_history_window(
 }
 
 /// Show the settings window (eagerly created at startup).
+#[allow(dead_code)]
 pub fn create_settings_window(app_handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(window) = app_handle.get_webview_window(PANEL_SETTINGS) {
         window.show().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
@@ -543,6 +544,7 @@ pub fn create_settings_window(app_handle: &AppHandle) -> Result<(), Box<dyn std:
 }
 
 /// Show the model panel window (eagerly created at startup).
+#[allow(dead_code)]
 pub fn create_model_panel_window(app_handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(window) = app_handle.get_webview_window(PANEL_MODEL) {
         window.show().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;

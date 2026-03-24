@@ -1,20 +1,15 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 
 /// Subsystem health status for UI display
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub enum SubsystemHealthStatus {
+    #[default]
     Unknown,
     Ready,
     Degraded,
     Unavailable,
-}
-
-impl Default for SubsystemHealthStatus {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// A thought event surfaced by CTP
@@ -269,7 +264,9 @@ impl DebugState {
                 self.memory_stats.episodic_count = count;
                 self.memory_stats.episodic_last_write = now;
             }
-            _ => {}
+            _ => {
+                tracing::trace!(tier = %tier, "unhandled memory tier in event");
+            }
         }
         self.memory_stats.last_write = now;
     }
@@ -288,56 +285,6 @@ impl DebugState {
         while self.conversation_turns.len() > self.conversation_turn_max {
             self.conversation_turns.pop_back();
         }
-    }
-}
-
-/// Format a timestamp as a relative time string (e.g., "2 minutes ago")
-pub fn format_relative_time(timestamp: DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let duration = now.signed_duration_since(timestamp);
-
-    if duration < Duration::zero() {
-        return "just now".to_string();
-    }
-
-    if duration < Duration::seconds(60) {
-        return format!("{}s ago", duration.num_seconds());
-    }
-
-    if duration < Duration::minutes(60) {
-        let mins = duration.num_minutes();
-        return format!("{}m ago", mins);
-    }
-
-    if duration < Duration::hours(24) {
-        let hours = duration.num_hours();
-        return format!("{}h ago", hours);
-    }
-
-    let days = duration.num_days();
-    format!("{}d ago", days)
-}
-
-/// Format an uptime duration (e.g., "2h 15m 30s")
-pub fn format_uptime(started_at: DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let duration = now.signed_duration_since(started_at);
-
-    if duration < Duration::zero() {
-        return "0s".to_string();
-    }
-
-    let total_seconds = duration.num_seconds();
-    let hours = total_seconds / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let seconds = total_seconds % 60;
-
-    if hours > 0 {
-        format!("{}h {}m {}s", hours, minutes, seconds)
-    } else if minutes > 0 {
-        format!("{}m {}s", minutes, seconds)
-    } else {
-        format!("{}s", seconds)
     }
 }
 
@@ -394,9 +341,9 @@ mod tests {
 
         // All known subsystems should start as Unknown
         for subsystem in KNOWN_SUBSYSTEMS {
-            let (status, timestamp) = state.subsystem_health.get(*subsystem).unwrap();
-            assert_eq!(*status, SubsystemHealthStatus::Unknown);
-            assert!(timestamp.is_none());
+            let entry = state.subsystem_health.get(*subsystem).unwrap();
+            assert_eq!(entry.status, SubsystemHealthStatus::Unknown);
+            assert!(entry.last_change.is_none());
         }
 
         assert_eq!(state.thought_feed.len(), 0);
@@ -413,13 +360,13 @@ mod tests {
 
         state.set_subsystem_status("daemon-bus", SubsystemHealthStatus::Ready);
 
-        let (status, timestamp) = state.subsystem_health.get("daemon-bus").unwrap();
-        assert_eq!(*status, SubsystemHealthStatus::Ready);
-        assert!(timestamp.is_some());
+        let entry = state.subsystem_health.get("daemon-bus").unwrap();
+        assert_eq!(entry.status, SubsystemHealthStatus::Ready);
+        assert!(entry.last_change.is_some());
 
         // Other subsystems should still be Unknown
-        let (status, _) = state.subsystem_health.get("inference").unwrap();
-        assert_eq!(*status, SubsystemHealthStatus::Unknown);
+        let entry = state.subsystem_health.get("inference").unwrap();
+        assert_eq!(entry.status, SubsystemHealthStatus::Unknown);
     }
 
     #[test]

@@ -370,6 +370,71 @@ pub struct SteeringAck {
     #[prost(string, tag = "2")]
     pub request_id: ::prost::alloc::string::String,
 }
+/// Model management messages.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ListModelsRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ModelInfo {
+    /// Unique identifier for the model.
+    #[prost(string, tag = "1")]
+    pub model_id: ::prost::alloc::string::String,
+    /// Current load state: "unloaded", "loading", "ready", "failed", "switching".
+    #[prost(string, tag = "2")]
+    pub status: ::prost::alloc::string::String,
+    /// File path to the GGUF model.
+    #[prost(string, tag = "3")]
+    pub path: ::prost::alloc::string::String,
+    /// VRAM usage in MB.
+    #[prost(uint64, tag = "4")]
+    pub vram_usage_mb: u64,
+    /// Display name extracted from GGUF metadata.
+    #[prost(string, tag = "5")]
+    pub display_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListModelsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub models: ::prost::alloc::vec::Vec<ModelInfo>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LoadModelRequest {
+    /// Path to the GGUF model file to load.
+    #[prost(string, tag = "1")]
+    pub model_path: ::prost::alloc::string::String,
+    /// Optional model ID. If empty, derived from filename.
+    #[prost(string, tag = "2")]
+    pub model_id: ::prost::alloc::string::String,
+    /// Number of GPU layers to offload. 0 means CPU-only.
+    #[prost(uint32, tag = "3")]
+    pub gpu_layers: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LoadModelResponse {
+    /// The model ID that was loaded (derived from filename if not provided).
+    #[prost(string, tag = "1")]
+    pub model_id: ::prost::alloc::string::String,
+    /// Load status: "ready" or "failed".
+    #[prost(string, tag = "2")]
+    pub status: ::prost::alloc::string::String,
+    /// Error message if status is "failed".
+    #[prost(string, tag = "3")]
+    pub error_message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnloadModelRequest {
+    /// The model ID to unload.
+    #[prost(string, tag = "1")]
+    pub model_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnloadModelResponse {
+    /// Whether the unload succeeded.
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+    /// Message describing success or failure reason.
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PromptContextEntry {
     #[prost(string, tag = "1")]
@@ -1991,7 +2056,7 @@ pub mod inference_service_client {
                 );
             self.inner.server_streaming(req, path, codec).await
         }
-        /// Read transformer layer activations. Phase 2 â€” stub only; not yet implemented.
+        /// Read transformer layer activations. Phase 2 — stub only; not yet implemented.
         pub async fn read_activations(
             &mut self,
             request: impl tonic::IntoRequest<super::ActivationRequest>,
@@ -2021,7 +2086,7 @@ pub mod inference_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Apply a steering vector during generation. Phase 3 â€” stub only; not yet implemented.
+        /// Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
         pub async fn steer(
             &mut self,
             request: impl tonic::IntoRequest<super::SteeringRequest>,
@@ -2041,6 +2106,87 @@ pub mod inference_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("sena.daemonbus.v1.InferenceService", "Steer"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// List all registered models and their states.
+        pub async fn list_models(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListModelsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListModelsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/ListModels",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("sena.daemonbus.v1.InferenceService", "ListModels"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Load a model into memory.
+        pub async fn load_model(
+            &mut self,
+            request: impl tonic::IntoRequest<super::LoadModelRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LoadModelResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/LoadModel",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("sena.daemonbus.v1.InferenceService", "LoadModel"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Unload a model from memory.
+        pub async fn unload_model(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UnloadModelRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UnloadModelResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/sena.daemonbus.v1.InferenceService/UnloadModel",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("sena.daemonbus.v1.InferenceService", "UnloadModel"),
+                );
             self.inner.unary(req, path, codec).await
         }
     }
@@ -4018,7 +4164,7 @@ pub mod inference_service_server {
             tonic::Response<Self::StreamCompleteStream>,
             tonic::Status,
         >;
-        /// Read transformer layer activations. Phase 2 â€” stub only; not yet implemented.
+        /// Read transformer layer activations. Phase 2 — stub only; not yet implemented.
         async fn read_activations(
             &self,
             request: tonic::Request<super::ActivationRequest>,
@@ -4026,11 +4172,35 @@ pub mod inference_service_server {
             tonic::Response<super::ActivationResponse>,
             tonic::Status,
         >;
-        /// Apply a steering vector during generation. Phase 3 â€” stub only; not yet implemented.
+        /// Apply a steering vector during generation. Phase 3 — stub only; not yet implemented.
         async fn steer(
             &self,
             request: tonic::Request<super::SteeringRequest>,
         ) -> std::result::Result<tonic::Response<super::SteeringAck>, tonic::Status>;
+        /// List all registered models and their states.
+        async fn list_models(
+            &self,
+            request: tonic::Request<super::ListModelsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListModelsResponse>,
+            tonic::Status,
+        >;
+        /// Load a model into memory.
+        async fn load_model(
+            &self,
+            request: tonic::Request<super::LoadModelRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LoadModelResponse>,
+            tonic::Status,
+        >;
+        /// Unload a model from memory.
+        async fn unload_model(
+            &self,
+            request: tonic::Request<super::UnloadModelRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UnloadModelResponse>,
+            tonic::Status,
+        >;
     }
     #[derive(Debug)]
     pub struct InferenceServiceServer<T> {
@@ -4276,6 +4446,141 @@ pub mod inference_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SteerSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/sena.daemonbus.v1.InferenceService/ListModels" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListModelsSvc<T: InferenceService>(pub Arc<T>);
+                    impl<
+                        T: InferenceService,
+                    > tonic::server::UnaryService<super::ListModelsRequest>
+                    for ListModelsSvc<T> {
+                        type Response = super::ListModelsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListModelsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as InferenceService>::list_models(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListModelsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/sena.daemonbus.v1.InferenceService/LoadModel" => {
+                    #[allow(non_camel_case_types)]
+                    struct LoadModelSvc<T: InferenceService>(pub Arc<T>);
+                    impl<
+                        T: InferenceService,
+                    > tonic::server::UnaryService<super::LoadModelRequest>
+                    for LoadModelSvc<T> {
+                        type Response = super::LoadModelResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::LoadModelRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as InferenceService>::load_model(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = LoadModelSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/sena.daemonbus.v1.InferenceService/UnloadModel" => {
+                    #[allow(non_camel_case_types)]
+                    struct UnloadModelSvc<T: InferenceService>(pub Arc<T>);
+                    impl<
+                        T: InferenceService,
+                    > tonic::server::UnaryService<super::UnloadModelRequest>
+                    for UnloadModelSvc<T> {
+                        type Response = super::UnloadModelResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UnloadModelRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as InferenceService>::unload_model(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UnloadModelSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

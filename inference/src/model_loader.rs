@@ -151,7 +151,7 @@ fn parse_gguf_general_name(model_path: &Path) -> Option<String> {
                     let str_len = u64::from_le_bytes(str_len_buf);
                     file.seek(SeekFrom::Current(str_len as i64)).ok()?;
                 }
-                4 | 5 | 6 => {
+                4..=6 => {
                     // u32, i32, f32: 4 bytes
                     file.seek(SeekFrom::Current(4)).ok()?;
                 }
@@ -159,7 +159,7 @@ fn parse_gguf_general_name(model_path: &Path) -> Option<String> {
                     // bool: 1 byte
                     file.seek(SeekFrom::Current(1)).ok()?;
                 }
-                0 | 1 | 2 | 3 => {
+                0..=3 => {
                     // u8, i8, u16, i16: 1, 1, 2, 2 bytes
                     let size = match value_type {
                         0 | 1 => 1,
@@ -168,7 +168,7 @@ fn parse_gguf_general_name(model_path: &Path) -> Option<String> {
                     };
                     file.seek(SeekFrom::Current(size)).ok()?;
                 }
-                10 | 11 | 12 => {
+                10..=12 => {
                     // u64, i64, f64: 8 bytes
                     file.seek(SeekFrom::Current(8)).ok()?;
                 }
@@ -187,8 +187,8 @@ fn parse_gguf_general_name(model_path: &Path) -> Option<String> {
                     let elem_size = match arr_type {
                         0 | 1 | 7 => 1,
                         2 | 3 => 2,
-                        4 | 5 | 6 => 4,
-                        10 | 11 | 12 => 8,
+                        4..=6 => 4,
+                        10..=12 => 8,
                         8 => {
                             // Array of strings — too complex for MVP, return None
                             return None;

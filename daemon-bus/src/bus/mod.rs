@@ -56,6 +56,20 @@ pub fn topic_name(topic: EventTopic) -> &'static str {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Boot signal name mapping — proto enum → string constant
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Converts a proto `BootSignal` enum variant to its canonical string name.
+/// This is the single source of truth for boot signal strings — no module
+/// in daemon-bus ever writes a boot signal string literal.
+///
+/// This helper wraps the proto-generated `.as_str_name()` method to follow
+/// the same pattern as `topic_name()` and provide a consistent API.
+pub fn boot_signal_name(signal: crate::generated::sena_daemonbus_v1::BootSignal) -> &'static str {
+    signal.as_str_name()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Bus event payload
 // ─────────────────────────────────────────────────────────────────────────────
 

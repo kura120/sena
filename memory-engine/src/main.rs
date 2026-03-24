@@ -370,9 +370,9 @@ where
     use crate::generated::sena_daemonbus_v1::memory_service_server::MemoryServiceServer;
 
     let memory_service = grpc::MemoryServiceImpl::new(Arc::clone(&engine));
-    let listen_addr: std::net::SocketAddr = format!("0.0.0.0:{}", config.grpc.listen_port)
+    let listen_addr: std::net::SocketAddr = format!("{}:{}", config.grpc.listen_address, config.grpc.listen_port)
         .parse()
-        .expect("listen address must be valid — config.grpc.listen_port is a u16");
+        .expect("listen address must be valid — config.grpc.listen_address is validated at load and listen_port is a u16");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
