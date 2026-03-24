@@ -2,8 +2,11 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { TitleBar } from "../../components/TitleBar/TitleBar";
+import { useOverlayAnimation } from "../../hooks/useOverlayAnimation";
+import { useWindowDragSave } from "../../hooks/useWindowDragSave";
 import { STRINGS } from "../../constants/strings";
-import { IconChevronRight, IconChevronDown, IconFolder } from "../../components/icons";
+import { IconChevronRight, IconChevronDown, IconFolder, IconModel } from "../../components/icons";
 import { Dropdown } from "../../components/Dropdown/Dropdown";
 import "./ModelPanel.css";
 import type { 
@@ -50,9 +53,15 @@ export function ModelPanel() {
      const [libraryOpen, setLibraryOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<"local" | "ollama">("local");
     const [extracting, setExtracting] = useState<string | null>(null);
+    const [extractError, setExtractError] = useState<string | null>(null);
     const [localSearch, setLocalSearch] = useState("");
     const [ollamaSearch, setOllamaSearch] = useState("");
     const [ollamaDir, setOllamaDir] = useState<string>("");
+    const [pinned, setPinned] = useState(false);
+    const [collapsed, setCollapsed] = useState(false);
+
+    useWindowDragSave();
+    const panelClass = useOverlayAnimation();
 
     // Load initial data
     useEffect(() => {
@@ -146,6 +155,7 @@ export function ModelPanel() {
 
     const handleExtract = async (model: OllamaModel) => {
         setExtracting(model.blob_digest);
+        setExtractError(null);
         try {
             const extractName = `${model.name}-${model.tag}`;
             await invoke("extract_ollama_model", { blobDigest: model.blob_digest, modelName: extractName });
@@ -153,6 +163,7 @@ export function ModelPanel() {
             refreshData();
         } catch (err) {
             console.error("Failed to extract model:", err);
+            setExtractError(String(err));
             setExtracting(null);
         }
     };
@@ -177,6 +188,35 @@ export function ModelPanel() {
     
     // Find the active model's metadata from local models
     const activeModelMeta = localModels.find(m => m.is_active);
+
+    // Build model usage segments from agent assignments for partition bar
+    const MODEL_COLORS = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#06b6d4", "#ec4899", "#8b5cf6", "#14b8a6"];
+    const modelSegments = (() => {
+        const modelCounts: Record<string, number> = {};
+        const totalAgents = AGENT_NAMES.length;
+        for (const agent of AGENT_NAMES) {
+            const assignedModel = assignments[agent] || "auto";
+            modelCounts[assignedModel] = (modelCounts[assignedModel] || 0) + 1;
+        }
+        const uniqueModels = Object.keys(modelCounts);
+        return uniqueModels.map((modelId, idx) => {
+            const count = modelCounts[modelId] ?? 0;
+            const meta = localModels.find(m => m.filename === modelId);
+            const label = modelId === "auto" 
+                ? "Auto" 
+                : meta?.display_name || modelId;
+            return {
+                modelId,
+                label,
+                percent: (count / totalAgents) * 100,
+                count,
+                color: MODEL_COLORS[idx % MODEL_COLORS.length],
+                isActive: modelId === "auto" 
+                    ? !!(inf && inf.active_model)
+                    : meta?.is_active ?? false,
+            };
+        });
+    })();
     
     // Sort models
     const sortedLocal = [...localModels].sort((a, b) => {
@@ -207,11 +247,27 @@ export function ModelPanel() {
     ];
 
     return (
-        <div className="model-panel">
-            <h2 className="panel-title">{STRINGS.PANEL_MODEL}</h2>
+        <div
+            className={`model-panel panel-glass ${panelClass}`}
+            style={{
+                background: "var(--bg-panel)",
+                borderColor: "var(--border)",
+                borderRadius: "var(--radius)",
+            }}
+        >
+            <TitleBar
+                icon={<IconModel size={14} />}
+                title={STRINGS.PANEL_MODEL}
+                pinned={pinned}
+                onPinToggle={() => setPinned(!pinned)}
+                collapsed={collapsed}
+                onCollapseToggle={() => setCollapsed(c => !c)}
+            />
             
-            {/* Active Model Section */}
-            <div className="section active-model">
+            {!collapsed && (
+            <div className="model-panel-body">
+                {/* Active Model Section */}
+                <div className="section active-model">
                 <div className="section-header">{STRINGS.MODEL_ACTIVE}</div>
                 <div className="card active-card">
                     {inf && inf.active_model ? (
@@ -241,6 +297,32 @@ export function ModelPanel() {
                                     <span className="tier-badge">{vram ? getTier(vram.total_mb) : "-"}</span>
                                 </div>
                             </div>
+                            {/* Agent model partition bar */}
+                            {modelSegments.length > 1 && (
+                                <div className="partition-container">
+                                    <div className="partition-label">Agent Distribution</div>
+                                    <div className="partition-bar">
+                                        {modelSegments.map(seg => (
+                                            <div
+                                                key={seg.modelId}
+                                                className={`partition-segment ${seg.isActive ? "active" : ""}`}
+                                                style={{ width: `${seg.percent}%`, background: seg.color }}
+                                                title={`${seg.label}: ${seg.count} agent${seg.count > 1 ? "s" : ""}`}
+                                            />
+                                        ))}
+                                    </div>
+                                    <div className="partition-legend">
+                                        {modelSegments.map(seg => (
+                                            <div key={seg.modelId} className="legend-item">
+                                                <span className="legend-swatch" style={{ background: seg.color }} />
+                                                <span className="legend-text" title={seg.label}>
+                                                    {seg.label} ({seg.count})
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </>
                     ) : (
                         <div className="empty-state">{STRINGS.MODEL_NO_ACTIVE}</div>
@@ -400,6 +482,7 @@ export function ModelPanel() {
                                             {m.is_extracted ? (
                                                 <span className="extracted-label">{STRINGS.MODEL_BADGE_EXTRACTED}</span>
                                             ) : (
+                                                <>
                                                 <button 
                                                     type="button"
                                                     className="action-btn primary"
@@ -408,6 +491,10 @@ export function ModelPanel() {
                                                 >
                                                     {extracting === m.blob_digest ? STRINGS.MODEL_EXTRACTING : STRINGS.MODEL_EXTRACT}
                                                 </button>
+                                                {extractError && extracting === null && (
+                                                    <span className="extract-error" title={extractError}>Failed</span>
+                                                )}
+                                                </>
                                             )}
                                         </div>
                                     </div>
@@ -417,6 +504,8 @@ export function ModelPanel() {
                     </div>
                 )}
             </div>
+            </div>
+            )}
         </div>
     );
 }

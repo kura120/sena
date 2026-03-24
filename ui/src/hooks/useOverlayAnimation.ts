@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface PanelAnimatePayload {
   action: "show" | "hide";
@@ -27,7 +27,7 @@ export function useOverlayAnimation(): string {
   useEffect(() => {
     let cancelled = false;
 
-    const unlistenPromise = listen<PanelAnimatePayload>("panel-animate", (event) => {
+    const unlistenPromise = getCurrentWindow().listen<PanelAnimatePayload>("panel-animate", (event) => {
       if (cancelled) return;
 
       const { action, delay_ms } = event.payload;

@@ -83,8 +83,7 @@ plans/
 .sisyphus/
 
 # Agents — Personal/local only
-agents/
-**/agents/
+.github/agents/
 
 # Proto/gRPC generated code
 **/src/generated/

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   IconSubsystemHealth,
   IconEventBus,
@@ -54,7 +55,7 @@ export function WidgetBar() {
       }));
     });
 
-    const unlistenAnimate = listen<{ action: string; delay_ms: number }>("panel-animate", (event) => {
+    const unlistenAnimate = getCurrentWindow().listen<{ action: string; delay_ms: number }>("panel-animate", (event) => {
       if (event.payload.action === "show") {
         setAnimationClass("widget-bar--visible");
       } else if (event.payload.action === "hide") {

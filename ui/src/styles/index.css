@@ -53,29 +53,7 @@ html, body, #root {
 .typing-dot:nth-child(2) { animation-delay: 200ms; }
 .typing-dot:nth-child(3) { animation-delay: 400ms; }
 
-/* Toast animations */
-@keyframes toast-enter {
-  from {
-    opacity: 0;
-    transform: translateX(100%);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes toast-exit {
-  from {
-    opacity: 1;
-    transform: translateX(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(100%);
-  }
-}
-
+/* Toast progress animation (used by Toast.css) */
 @keyframes toast-progress {
   from {
     width: 100%;
@@ -83,14 +61,6 @@ html, body, #root {
   to {
     width: 0%;
   }
-}
-
-.toast-entering {
-  animation: toast-enter 200ms ease-out forwards;
-}
-
-.toast-exiting {
-  animation: toast-exit 150ms ease-in forwards;
 }
 
 /* ── Panel glass effect ── */

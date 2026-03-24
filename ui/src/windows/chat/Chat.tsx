@@ -64,12 +64,13 @@ export function Chat() {
     
     try {
       const response = await invoke<SendMessageResponse>("send_message", { content: userMsg.final_response });
+      console.debug("[Chat] Raw response:", JSON.stringify(response));
       const assistantMsg: ParsedChatMessage = {
         id: crypto.randomUUID(),
-        pre_thought_text: response.pre_thought_text,
-        thought_content: response.thought_content,
-        final_response: response.response,
-        chain_of_thought_supported: response.chain_of_thought_supported,
+        pre_thought_text: response.pre_thought_text ?? null,
+        thought_content: response.thought_content ?? null,
+        final_response: response.response || "",
+        chain_of_thought_supported: response.chain_of_thought_supported ?? false,
         role: "assistant",
         timestamp: new Date(),
         model_id: response.model_id,
@@ -161,8 +162,8 @@ export function Chat() {
                   {msg.thought_content && (
                     <ThoughtBlock content={msg.thought_content} />
                   )}
-                  {/* Final response */}
-                  {msg.final_response && (
+                  {/* Final response — show fallback when empty */}
+                  {msg.final_response ? (
                     <div 
                       className="px-3 py-2 text-sm whitespace-pre-wrap break-words shadow-sm"
                       style={{
@@ -173,9 +174,20 @@ export function Chat() {
                     >
                       {msg.final_response}
                     </div>
+                  ) : !msg.thought_content && !msg.pre_thought_text && (
+                    <div 
+                      className="px-3 py-2 text-sm whitespace-pre-wrap break-words shadow-sm"
+                      style={{
+                        borderRadius: "12px 12px 12px 2px",
+                        background: "var(--chat-assistant-bg)",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      {STRINGS.CHAT_NO_RESPONSE}
+                    </div>
                   )}
-                  {/* Not supported label */}
-                  {!msg.chain_of_thought_supported && !msg.thought_content && (
+                  {/* CoT label — only show as metadata when there's an actual response */}
+                  {msg.final_response && !msg.chain_of_thought_supported && !msg.thought_content && (
                     <span className="cot-not-supported">{STRINGS.COT_NOT_SUPPORTED}</span>
                   )}
                 </div>

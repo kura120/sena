@@ -1,6 +1,5 @@
 :root {
-  --settings-sidebar-width: 200px;
-  --settings-header-height: 50px;
+  --settings-sidebar-width: 160px;
   --settings-footer-height: 60px;
 }
 
@@ -8,7 +7,7 @@ body {
     margin: 0;
     padding: 0;
     font-family: var(--font-sans);
-    background-color: var(--surface-1);
+    background-color: transparent;
     color: var(--text-primary);
     height: 100vh;
     overflow: hidden;
@@ -20,84 +19,62 @@ body {
     flex-direction: column;
     width: 100%;
     height: 100vh;
-    background: var(--bg-panel);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
     overflow: hidden;
     box-sizing: border-box;
 }
 
-.settings-header-bar {
+/* ── Body: sidebar + main ── */
+.settings-body {
     display: flex;
-    align-items: center;
-    background: var(--surface-2);
-    border-bottom: 1px solid var(--border-subtle);
-    flex-shrink: 0;
-}
-
-.settings-tabs-header {
     flex: 1;
+    min-height: 0;
+}
+
+/* ── Sidebar navigation ── */
+.settings-sidebar {
+    width: var(--settings-sidebar-width);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+}
+
+.settings-nav-item {
     display: flex;
     align-items: center;
-    height: 40px;
-    padding: 0 16px;
-    gap: 4px;
-    overflow-x: auto;
-}
-
-.settings-close-button {
-    width: 40px;
-    height: 40px;
-    background: transparent;
-    border: none;
-    border-left: 1px solid var(--border-subtle);
-    font-size: 20px;
-    cursor: pointer;
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.settings-close-button:hover {
-    background: var(--surface-3);
-    color: var(--text-primary);
-}
-
-.settings-tab-button {
-    padding: 6px 12px;
-    border-radius: 4px;
-    font-size: 13px;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-secondary);
     background: transparent;
     border: none;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: background 0.15s, color 0.15s;
+    text-align: left;
     white-space: nowrap;
 }
 
-.settings-tab-button:hover {
-    background: var(--surface-3);
+.settings-nav-item:hover {
+    background: var(--bg-hover);
     color: var(--text-primary);
 }
 
-.settings-tab-button.active {
-    background: var(--surface-3);
+.settings-nav-item.active {
+    background: rgba(255, 255, 255, 0.06);
     color: var(--accent-primary);
-    position: relative;
 }
 
-.settings-tab-button.active::after {
-    content: '';
-    position: absolute;
-    bottom: -8px; 
-    left: 0;
-    width: 100%;
-    height: 2px;
-    background: var(--accent-primary);
+/* ── Main area (content + footer) ── */
+.settings-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
 }
 
 .settings-content-area {
@@ -129,8 +106,6 @@ body {
     justify-content: flex-end;
     padding: 0 24px;
     gap: 12px;
-    position: sticky;
-    bottom: 0;
     flex-shrink: 0;
 }
 

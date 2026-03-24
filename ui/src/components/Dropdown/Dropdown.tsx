@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { IconChevronDown, IconCheck } from "../icons";
 import "./Dropdown.css";
 
@@ -21,7 +22,10 @@ interface DropdownProps {
 export function Dropdown({ options, value, onChange, placeholder, searchable, disabled, width }: DropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const selectedOption = options.find(o => o.value === value);
@@ -38,7 +42,12 @@ export function Dropdown({ options, value, onChange, placeholder, searchable, di
     if (!isOpen) return;
     
     const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      // Check if click is inside container (trigger) OR inside the portal list
+      const inContainer = containerRef.current && containerRef.current.contains(target);
+      const inList = listRef.current && listRef.current.contains(target);
+
+      if (!inContainer && !inList) {
         setIsOpen(false);
         setSearch("");
       }
@@ -46,6 +55,31 @@ export function Dropdown({ options, value, onChange, placeholder, searchable, di
     
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isOpen]);
+
+  // Close on scroll/resize to avoid detached dropdowns
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleScroll = (e: Event) => {
+      // Ignore scrolls inside the dropdown list itself (e.g. scrolling through options)
+      if (listRef.current && listRef.current.contains(e.target as Node)) return;
+      setIsOpen(false);
+      setSearch("");
+    };
+
+    const handleResize = () => {
+      setIsOpen(false);
+      setSearch("");
+    };
+
+    window.addEventListener("scroll", handleScroll, { capture: true });
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll, { capture: true });
+      window.removeEventListener("resize", handleResize);
+    };
   }, [isOpen]);
 
   // Close on Escape
@@ -66,7 +100,8 @@ export function Dropdown({ options, value, onChange, placeholder, searchable, di
   // Focus search input when opened
   useEffect(() => {
     if (isOpen && searchable && searchInputRef.current) {
-      searchInputRef.current.focus();
+      // Small timeout to allow render in portal
+      setTimeout(() => searchInputRef.current?.focus(), 10);
     }
   }, [isOpen, searchable]);
 
@@ -77,9 +112,21 @@ export function Dropdown({ options, value, onChange, placeholder, searchable, di
   }, [onChange]);
 
   const toggleOpen = useCallback(() => {
-    if (!disabled) {
-      setIsOpen(prev => !prev);
-      if (isOpen) setSearch("");
+    if (disabled) return;
+    
+    if (isOpen) {
+      setIsOpen(false);
+      setSearch("");
+    } else {
+      if (triggerRef.current) {
+        const rect = triggerRef.current.getBoundingClientRect();
+        setCoords({
+          top: rect.bottom + 4,
+          left: rect.left,
+          width: rect.width
+        });
+        setIsOpen(true);
+      }
     }
   }, [disabled, isOpen]);
 
@@ -90,6 +137,7 @@ export function Dropdown({ options, value, onChange, placeholder, searchable, di
       style={width ? { width } : undefined}
     >
       <button
+        ref={triggerRef}
         type="button"
         className={`dropdown__trigger ${isOpen ? "dropdown__trigger--open" : ""}`}
         onClick={toggleOpen}
@@ -101,8 +149,17 @@ export function Dropdown({ options, value, onChange, placeholder, searchable, di
         <IconChevronDown size={14} className="dropdown__trigger-icon" />
       </button>
       
-      {isOpen && (
-        <div className="dropdown__list">
+      {isOpen && coords && createPortal(
+        <div 
+          ref={listRef}
+          className="dropdown__list"
+          style={{
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            width: coords.width,
+          }}
+        >
           {searchable && (
             <input
               ref={searchInputRef}
@@ -135,7 +192,8 @@ export function Dropdown({ options, value, onChange, placeholder, searchable, di
                 <div className="dropdown__empty">No matches</div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

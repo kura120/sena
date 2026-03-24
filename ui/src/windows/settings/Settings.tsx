@@ -1,6 +1,18 @@
 import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { TitleBar } from "../../components/TitleBar/TitleBar";
+import { useOverlayAnimation } from "../../hooks/useOverlayAnimation";
+import { useWindowDragSave } from "../../hooks/useWindowDragSave";
+import {
+  IconSettings,
+  IconSubsystemHealth,
+  IconModel,
+  IconMemoryStats,
+  IconThoughtStream,
+  IconPromptTrace,
+  IconEventBus,
+  IconBell,
+} from "../../components/icons";
 import "./Settings.css";
 
 import { OverlayTab } from "./tabs/OverlayTab";
@@ -12,25 +24,32 @@ import { PromptComposerTab } from "./tabs/PromptComposerTab";
 import { DaemonBusTab } from "./tabs/DaemonBusTab";
 import { LoggingTab } from "./tabs/LoggingTab";
 
+import type { IconProps } from "../../types";
+
+const tabs: { id: string; label: string; subsystem: string | null; icon: React.FC<IconProps> }[] = [
+  { id: "overlay", label: "Overlay", subsystem: "ui", icon: IconSubsystemHealth },
+  { id: "appearance", label: "Appearance", subsystem: "ui", icon: IconSettings },
+  { id: "inference", label: "Inference", subsystem: "inference", icon: IconModel },
+  { id: "memory", label: "Memory", subsystem: "memory-engine", icon: IconMemoryStats },
+  { id: "ctp", label: "CTP", subsystem: "ctp", icon: IconThoughtStream },
+  { id: "prompt", label: "Prompt", subsystem: "prompt-composer", icon: IconPromptTrace },
+  { id: "daemon", label: "Daemon Bus", subsystem: "daemon-bus", icon: IconEventBus },
+  { id: "logging", label: "Logging", subsystem: null, icon: IconBell },
+];
+
 export function Settings() {
   const [activeTab, setActiveTab] = useState("overlay");
   const [dirty, setDirty] = useState(false);
   const [restartDirty, setRestartDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   
   // Handlers for the current active tab
   const [currentSaveHandler, setCurrentSaveHandler] = useState<(() => Promise<void>) | null>(null);
 
-  const tabs = [
-    { id: "overlay", label: "Overlay", subsystem: "ui" },
-    { id: "appearance", label: "Appearance", subsystem: "ui" },
-    { id: "inference", label: "Inference", subsystem: "inference" },
-    { id: "memory", label: "Memory", subsystem: "memory-engine" },
-    { id: "ctp", label: "CTP", subsystem: "ctp" },
-    { id: "prompt", label: "Prompt", subsystem: "prompt-composer" },
-    { id: "daemon", label: "Daemon Bus", subsystem: "daemon-bus" },
-    { id: "logging", label: "Logging", subsystem: null },
-  ];
+  useWindowDragSave();
+  const panelClass = useOverlayAnimation();
 
   const handleDirtyChange = useCallback((isDirty: boolean, isRestartDirty: boolean) => {
       setDirty(isDirty);
@@ -74,10 +93,6 @@ export function Settings() {
       }
   };
 
-  const handleClose = () => {
-      getCurrentWindow().hide();
-  };
-
   const renderActiveTab = () => {
       const commonProps = {
           onDirtyChange: handleDirtyChange,
@@ -100,55 +115,76 @@ export function Settings() {
   const currentTabInfo = tabs.find(t => t.id === activeTab);
 
   return (
-    <div className="settings-container">
-      <div className="settings-header-bar">
-        <div className="settings-tabs-header">
-            {tabs.map((tab) => (
-            <button
-                key={tab.id}
-                className={`settings-tab-button ${activeTab === tab.id ? "active" : ""}`}
-                onClick={() => handleTabChange(tab.id)}
-            >
-                {tab.label}
-            </button>
-            ))}
-        </div>
-        <button className="settings-close-button" onClick={handleClose} title="Close">
-            ×
-        </button>
-      </div>
+    <div
+      className={`settings-container panel-glass ${panelClass}`}
+      style={{
+        background: "var(--bg-panel)",
+        borderColor: "var(--border)",
+        borderRadius: "var(--radius)",
+      }}
+    >
+      <TitleBar
+        icon={<IconSettings size={14} />}
+        title="Settings"
+        pinned={pinned}
+        onPinToggle={() => setPinned(!pinned)}
+        collapsed={collapsed}
+        onCollapseToggle={() => setCollapsed(c => !c)}
+      />
 
-      <div className="settings-content-area">
-        {renderActiveTab()}
-      </div>
+      {!collapsed && (
+        <div className="settings-body">
+          <nav className="settings-sidebar">
+            {tabs.map((tab) => {
+              const TabIcon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  className={`settings-nav-item ${activeTab === tab.id ? "active" : ""}`}
+                  onClick={() => handleTabChange(tab.id)}
+                >
+                  <TabIcon size={14} />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </nav>
 
-      <div className="settings-footer">
-        {dirty && (
-            <>
-                {restartDirty && currentTabInfo?.subsystem && (
+          <div className="settings-main">
+            <div className="settings-content-area">
+              {renderActiveTab()}
+            </div>
+
+            <div className="settings-footer">
+              {dirty && (
+                <>
+                  {restartDirty && currentTabInfo?.subsystem && (
                     <button 
-                        className="settings-btn settings-btn-primary" 
-                        onClick={() => handleSave(true)}
-                        disabled={saving}
+                      className="settings-btn settings-btn-primary" 
+                      onClick={() => handleSave(true)}
+                      disabled={saving}
                     >
-                        {saving ? "Saving..." : `Save & Restart ${currentTabInfo.subsystem}`}
+                      {saving ? "Saving..." : `Save & Restart ${currentTabInfo.subsystem}`}
                     </button>
-                )}
-                <button 
+                  )}
+                  <button 
                     className="settings-btn settings-btn-secondary" 
                     onClick={() => handleSave(false)}
                     disabled={saving}
-                >
+                  >
                     {saving ? "Saving..." : (restartDirty ? "Save Only" : "Save")}
+                  </button>
+                </>
+              )}
+              {!dirty && (
+                <button className="settings-btn settings-btn-secondary" disabled>
+                  Up to date
                 </button>
-            </>
-        )}
-        {!dirty && (
-            <button className="settings-btn settings-btn-secondary" disabled>
-                Up to date
-            </button>
-        )}
-      </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -20,6 +20,7 @@ export const STRINGS = {
   CHAT_SEND: "Send message",
   CHAT_REACTIVE_LOOP_PREFIX: "reactive-loop",
   CHAT_ERROR_PREFIX: "Error",
+  CHAT_NO_RESPONSE: "No response received — the model may not be loaded. Check the Model panel.",
   COT_THINKING: "Thinking...",
   COT_THOUGHT_FOR: "Thought for",
   COT_SECONDS: "s",

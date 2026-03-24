@@ -793,21 +793,30 @@ pub fn show_single_panel(app_handle: &AppHandle, label: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// Hide a single panel window and persist its closed state.
+/// Hide a single panel window with animation and persist its closed state.
+///
+/// The flow mirrors `hide_all_panels`:
+/// 1. Emit `panel-animate` hide event so the frontend plays the CSS transition
+/// 2. Immediately persist state and notify widget bar
+/// 3. After 150ms, actually hide the window
 pub fn hide_single_panel(app_handle: &AppHandle, label: &str) -> Result<(), String> {
     use tauri_plugin_store::StoreExt;
 
-    if let Some(window) = app_handle.get_webview_window(label) {
-        window.hide().map_err(|e| {
-            let msg = format!("Failed to hide panel {}: {}", label, e);
-            error!(label, error = %e, "failed to hide panel");
-            msg
-        })?;
-    } else {
+    if app_handle.get_webview_window(label).is_none() {
         return Err(format!("Panel window '{}' not found", label));
     }
 
-    // Persist state
+    // Emit hide animation event to the panel
+    let _ = app_handle.emit_to(
+        label,
+        "panel-animate",
+        OverlayAnimationPayload {
+            action: "hide".to_string(),
+            delay_ms: 0,
+        },
+    );
+
+    // Persist state immediately so widget bar updates without waiting for animation
     if let Ok(store) = app_handle.store("panel-states.json") {
         store.set(label.to_string(), serde_json::json!(false));
         if let Err(save_error) = store.save() {
@@ -821,7 +830,20 @@ pub fn hide_single_panel(app_handle: &AppHandle, label: &str) -> Result<(), Stri
         "is_open": false,
     }));
 
-    info!(label, "Single panel hidden");
+    // Schedule actual window hide after animation completes (120ms transition + buffer)
+    let handle = app_handle.clone();
+    let label_owned = label.to_string();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        if let Some(window) = handle.get_webview_window(&label_owned) {
+            if let Err(e) = window.hide() {
+                error!(label = %label_owned, error = %e, "Failed to hide panel after animation");
+            }
+        }
+    });
+
+    info!(label, "Single panel hiding with animation");
     Ok(())
 }
 
