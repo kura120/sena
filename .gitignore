@@ -107,3 +107,4 @@ ui/src-tauri/gen/
 docs/audit/
 docs/decisions/
 .github/instructions/reactive-loop.instructions.md
+.vite/
