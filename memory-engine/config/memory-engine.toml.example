@@ -11,6 +11,8 @@
 
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
+# Bind address for the MemoryService gRPC server. Use 127.0.0.1 for localhost-only.
+listen_address = "127.0.0.1"
 # Port on which memory-engine serves its own MemoryService gRPC server.
 listen_port = 50053
 # How long to wait for the initial connection to daemon-bus before giving up.

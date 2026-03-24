@@ -62,6 +62,10 @@ models/
 .env.*
 !.env.example
 
+# Subsystem configs — personal/local only
+**/config/*.toml
+!**/config/*.toml.example
+
 # ── Editor ───────────────────────────────────────────────────────────────────
 .zed/
 .idea/

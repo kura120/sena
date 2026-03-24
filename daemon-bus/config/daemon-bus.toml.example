@@ -147,11 +147,13 @@ command = "target/debug/reactive-loop.exe"
 args = []
 working_directory = "reactive-loop"
 
-[supervisor.subsystems.agents]
-subsystem_id = "agents"
-command = "uv"
-args = ["run", "python", "-m", "sena_agents"]
-working_directory = "../agents"
+# [supervisor.subsystems.agents]
+# subsystem_id = "agents"
+# command = "uv"
+# args = ["run", "python", "-m", "sena_agents"]
+# working_directory = "../agents"
+# COMMENTED OUT: The sena_agents module does not exist yet and causes a supervisor restart loop.
+# This entry will be restored in Milestone D when the Python agents subsystem is implemented.
 
 [supervisor.subsystems.model_probe]
 subsystem_id = "model_probe"
