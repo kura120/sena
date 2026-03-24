@@ -86,6 +86,10 @@ plans/
 agents/
 **/agents/
 
+# Proto/gRPC generated code
+**/src/generated/
+**/generated/
+
 # ech0 storage
 **/data/*.redb
 **/data/*.usearch
