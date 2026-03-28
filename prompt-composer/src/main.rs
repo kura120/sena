@@ -17,6 +17,7 @@
 //! No `println!` or `eprintln!` except for the single pre-tracing fatal path.
 
 pub mod assembler;
+pub mod capabilities;
 pub mod config;
 pub mod error;
 pub mod esu;
@@ -139,8 +140,28 @@ async fn async_main() -> i32 {
         }
     }
 
-    // ── Step 5: Start gRPC server ───────────────────────────────────────
-    let grpc_service = PromptComposerGrpcService::new(Arc::clone(&config));
+    // ── Step 5: Connect to Event Bus ────────────────────────────────────
+    let event_bus_client = match EventBusServiceClient::connect(daemon_bus_address.clone()).await {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::error!(
+                subsystem = SUBSYSTEM_ID,
+                event_type = "event_bus_connection_failed",
+                error = %e,
+                "failed to connect to event bus"
+            );
+            return 1;
+        }
+    };
+
+    tracing::info!(
+        subsystem = SUBSYSTEM_ID,
+        event_type = "event_bus_connected",
+        "connected to event bus"
+    );
+
+    // ── Step 6: Start gRPC server ───────────────────────────────────────
+    let grpc_service = PromptComposerGrpcService::new(Arc::clone(&config), event_bus_client);
     let listen_addr_result: Result<std::net::SocketAddr, _> =
         format!("{}:{}", config.grpc.listen_address, config.grpc.listen_port)
             .parse()
@@ -199,10 +220,11 @@ async fn async_main() -> i32 {
         }
     });
 
-    // ── Step 6: Signal PROMPT_COMPOSER_READY ────────────────────────────
+    // ── Step 7: Signal PROMPT_COMPOSER_READY ────────────────────────────
     let ready_request = tonic::Request::new(BootSignalRequest {
         subsystem_id: SUBSYSTEM_ID.to_owned(),
         signal: BootSignal::PromptComposerReady.into(),
+        capabilities: capabilities::get_capabilities(),
     });
 
     match boot_client.signal_ready(ready_request).await {
@@ -226,7 +248,7 @@ async fn async_main() -> i32 {
         }
     }
 
-    // ── Step 7: Await shutdown ──────────────────────────────────────────
+    // ── Step 8: Await shutdown ──────────────────────────────────────────
     tracing::info!(
         subsystem = SUBSYSTEM_ID,
         event_type = "running",

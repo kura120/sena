@@ -94,7 +94,7 @@ Capability flags in the index come directly from each subsystem's `manifest.toml
 
 ## SubsystemNode Schema
 
-Every node in the graph follows this structure. Never add fields to the schema without updating both `generate.py` and the proto definition in `daemon-bus/proto/codebase_context.proto`.
+Every node in the graph follows this structure. Never add fields to the schema without updating both `generate.py` and the proto definition in `shared/proto/`.
 
 ```python
 @dataclass

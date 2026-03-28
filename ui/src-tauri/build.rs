@@ -7,10 +7,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tauri_build::build();
 
-    println!("cargo:rerun-if-changed=../../daemon-bus/proto/sena.daemonbus.v1.proto");
+    println!("cargo:rerun-if-changed=../../shared/proto/sena.daemonbus.v1.proto");
 
-    let proto_path = "../../daemon-bus/proto/sena.daemonbus.v1.proto";
-    let proto_dir = "../../daemon-bus/proto";
+    let proto_path = "../../shared/proto/sena.daemonbus.v1.proto";
+    let proto_dir = "../../shared/proto";
 
     // Ensure the generated output directory exists.
     std::fs::create_dir_all("src/generated").ok();

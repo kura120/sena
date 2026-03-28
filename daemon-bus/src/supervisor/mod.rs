@@ -922,3 +922,55 @@ impl Supervisor {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bus::EventBus;
+    use crate::config::SupervisorConfig;
+
+    /// Verify that when all retries are exhausted, the supervisor publishes
+    /// a DEGRADED_MODE event to the event bus.
+    #[tokio::test]
+    async fn degraded_mode_broadcast_after_retry_exhaustion() {
+        let bus = EventBus::new(16);
+        let mut bus_rx = bus
+            .subscribe("test_subscriber", &[EventTopic::TopicSubsystemDegraded])
+            .await;
+
+        // Create a config with zero retries so we go directly to degraded mode.
+        let config = SupervisorConfig {
+            max_retries: 0,
+            backoff_ms: vec![],
+            process_start_grace_ms: 2000,
+            subsystems: std::collections::HashMap::new(),
+        };
+
+        let supervisor = Supervisor::new(config, bus.clone());
+
+        // Manually invoke enter_degraded_mode.
+        supervisor
+            .enter_degraded_mode("test_subsystem", "test_subsystem")
+            .await;
+
+        // Check that a DEGRADED event was published.
+        let event = tokio::time::timeout(Duration::from_millis(100), bus_rx.recv())
+            .await
+            .expect("should receive event within timeout")
+            .expect("bus should not be closed");
+
+        assert_eq!(
+            event.topic,
+            EventTopic::TopicSubsystemDegraded,
+            "event topic should be DEGRADED"
+        );
+        assert_eq!(
+            event.source_subsystem, "test_subsystem",
+            "source should be the failed subsystem"
+        );
+    }
+}

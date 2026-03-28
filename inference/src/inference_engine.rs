@@ -395,6 +395,7 @@ impl InferenceEngine {
         let unavailable_request = tonic::Request::new(BootSignalRequest {
             subsystem_id: SUBSYSTEM_ID.to_owned(),
             signal: BootSignal::InferenceUnavailable.into(),
+            capabilities: vec![],
         });
 
         if let Err(signal_error) = boot_client.signal_ready(unavailable_request).await {
@@ -505,6 +506,7 @@ impl InferenceEngine {
                 let ready_request = tonic::Request::new(BootSignalRequest {
                     subsystem_id: SUBSYSTEM_ID.to_owned(),
                     signal: BootSignal::InferenceReady.into(),
+                    capabilities: crate::capabilities::get_capabilities(),
                 });
 
                 if let Err(signal_error) = boot_client.signal_ready(ready_request).await {
@@ -537,6 +539,7 @@ impl InferenceEngine {
                 let unavailable_request = tonic::Request::new(BootSignalRequest {
                     subsystem_id: SUBSYSTEM_ID.to_owned(),
                     signal: BootSignal::InferenceUnavailable.into(),
+                    capabilities: vec![],
                 });
 
                 if let Err(signal_error) = boot_client.signal_ready(unavailable_request).await {

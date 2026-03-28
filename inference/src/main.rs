@@ -19,6 +19,7 @@
 //!
 //! No `println!` or `eprintln!` except for the single pre-tracing fatal path.
 
+pub mod capabilities;
 pub mod config;
 pub mod error;
 pub mod grpc;
@@ -296,6 +297,7 @@ async fn async_main() -> i32 {
     let ready_request = tonic::Request::new(BootSignalRequest {
         subsystem_id: SUBSYSTEM_ID.to_owned(),
         signal: BootSignal::InferenceReady.into(),
+        capabilities: capabilities::get_capabilities(),
     });
 
     match boot_client.signal_ready(ready_request).await {
@@ -306,6 +308,7 @@ async fn async_main() -> i32 {
                 signal = "INFERENCE_READY",
                 model_display_name = %display_name,
                 vram_used_mb = vram_used_mb,
+                capabilities = ?capabilities::get_capabilities(),
                 "INFERENCE_READY signaled to daemon-bus"
             );
 
@@ -331,11 +334,10 @@ async fn async_main() -> i32 {
                         timestamp: chrono::Utc::now().to_rfc3339(),
                     };
 
-                    let publish_request = tonic::Request::new(
-                        crate::generated::sena_daemonbus_v1::PublishRequest {
+                    let publish_request =
+                        tonic::Request::new(crate::generated::sena_daemonbus_v1::PublishRequest {
                             event: Some(bus_event),
-                        },
-                    );
+                        });
 
                     if let Err(publish_error) = event_client.publish(publish_request).await {
                         tracing::warn!(
@@ -661,6 +663,7 @@ async fn best_effort_signal(
     let request = tonic::Request::new(BootSignalRequest {
         subsystem_id: SUBSYSTEM_ID.to_owned(),
         signal: signal.into(),
+        capabilities: vec![],
     });
 
     match boot_client.signal_ready(request).await {

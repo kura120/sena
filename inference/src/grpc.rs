@@ -206,19 +206,16 @@ impl InferenceService for InferenceGrpcService {
         };
 
         // Initialize llama backend (required for load_model)
-        let backend = Arc::new(llama_cpp_2::llama_backend::LlamaBackend::init().map_err(
-            |e| Status::internal(format!("failed to initialize llama backend: {}", e)),
-        )?);
+        let backend = Arc::new(
+            llama_cpp_2::llama_backend::LlamaBackend::init().map_err(|e| {
+                Status::internal(format!("failed to initialize llama backend: {}", e))
+            })?,
+        );
 
         // Attempt to load the model
         let load_result = self
             .engine
-            .load_model(
-                &model_id,
-                &req.model_path,
-                req.gpu_layers,
-                backend,
-            )
+            .load_model(&model_id, &req.model_path, req.gpu_layers, backend)
             .await;
 
         match load_result {
@@ -298,7 +295,7 @@ mod tests {
         let content = r#"
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
-listen_address = "0.0.0.0"
+listen_address = "127.0.0.1"
 listen_port = 50055
 connection_timeout_ms = 5000
 
@@ -400,7 +397,7 @@ format = "json"
         let content = r#"
 [grpc]
 daemon_bus_address = "http://127.0.0.1:50051"
-listen_address = "0.0.0.0"
+listen_address = "127.0.0.1"
 listen_port = 50055
 connection_timeout_ms = 5000
 
@@ -470,7 +467,7 @@ format = "json"
         let service = InferenceGrpcService::new(test_engine());
         let request = Request::new(crate::generated::sena_daemonbus_v1::ListModelsRequest {});
         let result = service.list_models(request).await;
-        
+
         assert!(result.is_ok());
         let response = result.unwrap(); // test: just confirmed is_ok
         assert_eq!(response.into_inner().models.len(), 0);
@@ -484,11 +481,11 @@ format = "json"
             model_id: "test-model".into(),
             gpu_layers: 0,
         });
-        
+
         let result = service.load_model(request).await;
         assert!(result.is_err());
         let status = result.unwrap_err(); // test: just confirmed is_err
-        // Should return NotFound or Internal for invalid path
+                                          // Should return NotFound or Internal for invalid path
         assert!(
             status.code() == tonic::Code::NotFound || status.code() == tonic::Code::Internal,
             "Expected NotFound or Internal, got {:?}",
@@ -502,10 +499,151 @@ format = "json"
         let request = Request::new(crate::generated::sena_daemonbus_v1::UnloadModelRequest {
             model_id: "nonexistent-model-id".into(),
         });
-        
+
         let result = service.unload_model(request).await;
         assert!(result.is_err());
         let status = result.unwrap_err(); // test: just confirmed is_err
         assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_list_models_with_registered_models() {
+        let engine = test_engine();
+        let service = InferenceGrpcService::new(Arc::clone(&engine));
+
+        // Register some test models directly in the registry
+        engine
+            .registry()
+            .register(
+                "model-a".to_string(),
+                "/path/to/model-a.gguf".to_string(),
+                2048,
+                "Model A Display Name".to_string(),
+            )
+            .await
+            .expect("test: register model-a");
+
+        engine
+            .registry()
+            .set_state("model-a", ModelLoadState::Ready)
+            .await
+            .expect("test: set model-a ready");
+
+        engine
+            .registry()
+            .register(
+                "model-b".to_string(),
+                "/path/to/model-b.gguf".to_string(),
+                4096,
+                "Model B Display Name".to_string(),
+            )
+            .await
+            .expect("test: register model-b");
+
+        engine
+            .registry()
+            .set_state("model-b", ModelLoadState::Unloaded)
+            .await
+            .expect("test: set model-b unloaded");
+
+        // Call ListModels
+        let request = Request::new(ListModelsRequest {});
+        let result = service.list_models(request).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap(); // test: just confirmed is_ok
+        let models = response.into_inner().models;
+
+        // Should have 2 models
+        assert_eq!(models.len(), 2);
+
+        // Find model-a and verify fields
+        let model_a = models
+            .iter()
+            .find(|m| m.model_id == "model-a")
+            .expect("test: model-a exists");
+        assert_eq!(model_a.status, "ready");
+        assert_eq!(model_a.path, "/path/to/model-a.gguf");
+        assert_eq!(model_a.vram_usage_mb, 2048);
+        assert_eq!(model_a.display_name, "Model A Display Name");
+
+        // Find model-b and verify fields
+        let model_b = models
+            .iter()
+            .find(|m| m.model_id == "model-b")
+            .expect("test: model-b exists");
+        assert_eq!(model_b.status, "unloaded");
+        assert_eq!(model_b.path, "/path/to/model-b.gguf");
+        assert_eq!(model_b.vram_usage_mb, 4096);
+        assert_eq!(model_b.display_name, "Model B Display Name");
+    }
+
+    #[tokio::test]
+    async fn test_unload_model_idempotent() {
+        let engine = test_engine();
+        let service = InferenceGrpcService::new(Arc::clone(&engine));
+
+        // Register a model
+        engine
+            .registry()
+            .register(
+                "test-model".to_string(),
+                "/path/to/test.gguf".to_string(),
+                1024,
+                "Test Model".to_string(),
+            )
+            .await
+            .expect("test: register");
+
+        // First unload (model is already unloaded by default)
+        let request1 = Request::new(UnloadModelRequest {
+            model_id: "test-model".to_string(),
+        });
+        let result1 = service.unload_model(request1).await;
+        assert!(result1.is_ok(), "first unload should succeed");
+        let response1 = result1.unwrap(); // test: just confirmed is_ok
+        assert!(response1.into_inner().success);
+
+        // Second unload (should be idempotent)
+        let request2 = Request::new(UnloadModelRequest {
+            model_id: "test-model".to_string(),
+        });
+        let result2 = service.unload_model(request2).await;
+        assert!(
+            result2.is_ok(),
+            "second unload should also succeed (idempotent)"
+        );
+        let response2 = result2.unwrap(); // test: just confirmed is_ok
+        assert!(response2.into_inner().success);
+    }
+
+    #[tokio::test]
+    async fn test_load_model_empty_model_id_derives_from_filename() {
+        // Create a temporary file to test path validation
+        use tempfile::NamedTempFile;
+        let temp_file = NamedTempFile::new().expect("test: create temp file");
+        let temp_path = temp_file.path().to_str().expect("test: path to string");
+
+        let service = InferenceGrpcService::new(test_engine());
+        let request = Request::new(LoadModelRequest {
+            model_path: temp_path.to_string(),
+            model_id: String::new(), // Empty model_id — should be derived
+            gpu_layers: 0,
+        });
+
+        // Will fail during actual model load, but should get past path validation
+        let result = service.load_model(request).await;
+
+        // We expect an error during actual llama backend init or model load
+        // because it's not a real GGUF file, but it should NOT be NotFound
+        if let Err(status) = result {
+            // Path exists, so it shouldn't be NotFound
+            assert_ne!(
+                status.code(),
+                tonic::Code::NotFound,
+                "Should get past path validation, got: {:?}",
+                status
+            );
+        }
     }
 }

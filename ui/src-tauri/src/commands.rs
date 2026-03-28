@@ -551,6 +551,7 @@ pub async fn get_overlay_setting(
         // Return defaults for known settings
         match key.as_str() {
             "reopen_panels_on_toggle" => serde_json::json!(true),
+            "verbose_health" => serde_json::json!(false),
             _ => serde_json::json!(null),
         }
     });
@@ -573,10 +574,16 @@ pub async fn set_overlay_setting(
         .store("overlay-settings.json")
         .map_err(|e| format!("Failed to access overlay settings store: {}", e))?;
 
-    store.set(key, value);
+    store.set(key.clone(), value.clone());
     store
         .save()
         .map_err(|e| format!("Failed to persist overlay setting: {}", e))?;
+
+    // Broadcast setting change so other windows can react
+    let _ = app_handle.emit("overlay-setting-changed", serde_json::json!({
+        "key": key,
+        "value": value,
+    }));
 
     Ok(())
 }

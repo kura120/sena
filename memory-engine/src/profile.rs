@@ -219,7 +219,7 @@ pub fn derive_config(
     // Phase 2: }
     let degraded_extractor = true;
 
-    tracing::info!(
+    tracing::warn!(
         subsystem = "memory_engine",
         component = "profile",
         structured_output = ?profile.structured_output,

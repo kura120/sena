@@ -7,6 +7,12 @@ pub struct BootSignalRequest {
     /// The boot signal being emitted.
     #[prost(enumeration = "BootSignal", tag = "2")]
     pub signal: i32,
+    /// Optional list of capabilities this subsystem provides.
+    /// Format: "capability_name" for operational capabilities
+    ///          "capability_name:degraded" for degraded capabilities
+    /// Examples: "memory_write", "text_completion:degraded"
+    #[prost(string, repeated, tag = "3")]
+    pub capabilities: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct BootSignalResponse {

@@ -101,4 +101,12 @@ export const STRINGS = {
   MODEL_OLLAMA_NOT_DETECTED: "Not detected",
   MODEL_SEARCH_LOCAL: "Search local models...",
   MODEL_SEARCH_OLLAMA: "Search Ollama models...",
+
+  // Verbose health
+  VERBOSE_HEALTH_LABEL: "Verbose Health Details",
+  VERBOSE_HEALTH_DESC: "Show detailed capability information for each subsystem in the Health panel",
+  VERBOSE_CAPABILITIES_SUMMARY: "{total} capabilities",
+  VERBOSE_DEGRADED_SUFFIX: ", {count} degraded",
+  VERBOSE_NO_DETAILS: "No detailed capability data available",
+  VERBOSE_DEGRADED_SUMMARY: "Degraded — {count} capabilities affected",
 } as const;

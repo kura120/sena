@@ -1,6 +1,7 @@
 //! gRPC service implementation for PromptComposerService.
 //!
-//! Wires AssemblePrompt RPC to the assembler logic.
+//! Wires AssemblePrompt RPC to the assembler logic and publishes
+//! TOPIC_PC_PROMPT_ASSEMBLED events after successful assembly.
 
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -8,9 +9,12 @@ use tonic::{Request, Response, Status};
 use crate::assembler::PromptAssembler;
 use crate::config::Config;
 use crate::generated::sena_daemonbus_v1::{
+    event_bus_service_client::EventBusServiceClient,
     prompt_composer_service_server::PromptComposerService, AssemblePromptRequest,
-    AssemblePromptResponse,
+    AssemblePromptResponse, BusEvent, EventTopic, PublishRequest,
 };
+
+const SUBSYSTEM_ID: &str = "prompt_composer";
 
 /// gRPC service implementation for prompt assembly.
 ///
@@ -18,13 +22,18 @@ use crate::generated::sena_daemonbus_v1::{
 pub struct PromptComposerGrpcService {
     assembler: PromptAssembler,
     config: Arc<Config>,
+    event_bus_client: Arc<tokio::sync::Mutex<EventBusServiceClient<tonic::transport::Channel>>>,
 }
 
 impl PromptComposerGrpcService {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        event_bus_client: EventBusServiceClient<tonic::transport::Channel>,
+    ) -> Self {
         Self {
             assembler: PromptAssembler::new(),
             config,
+            event_bus_client: Arc::new(tokio::sync::Mutex::new(event_bus_client)),
         }
     }
 }
@@ -48,6 +57,11 @@ impl PromptComposerService for PromptComposerGrpcService {
             request_id = %request_id,
             "received AssemblePrompt request"
         );
+
+        // Extract trace_context before moving context
+        let trace_context = req.context.as_ref()
+            .map(|c| c.trace_context.clone())
+            .unwrap_or_default();
 
         // Extract context
         let context = req.context.ok_or_else(|| {
@@ -86,6 +100,10 @@ impl PromptComposerService for PromptComposerGrpcService {
             "prompt assembly successful"
         );
 
+        // Publish TOPIC_PC_PROMPT_ASSEMBLED event
+        self.publish_prompt_assembled_event(&assembly_result, &request_id, &trace_context)
+            .await;
+
         let response = AssemblePromptResponse {
             assembled_prompt: assembly_result.assembled_prompt,
             assembly_trace: Some(assembly_result.trace),
@@ -93,6 +111,73 @@ impl PromptComposerService for PromptComposerGrpcService {
         };
 
         Ok(Response::new(response))
+    }
+}
+
+impl PromptComposerGrpcService {
+    /// Publish TOPIC_PC_PROMPT_ASSEMBLED event after successful assembly.
+    async fn publish_prompt_assembled_event(
+        &self,
+        assembly_result: &crate::assembler::AssemblyResult,
+        request_id: &str,
+        trace_context: &str,
+    ) {
+        // Build JSON payload with prompt trace metadata
+        let payload_json = serde_json::json!({
+            "sections": assembly_result.trace.included_tiers,
+            "toon_output": truncate_preview(&assembly_result.assembled_prompt, 500),
+            "token_count": assembly_result.trace.token_count,
+            "token_budget": assembly_result.trace.token_budget,
+            "encoding_used": assembly_result.trace.encoding_used,
+            "dropped_tiers": assembly_result.trace.dropped_tiers,
+            "request_id": request_id,
+        });
+
+        let payload_bytes = payload_json.to_string().into_bytes();
+
+        let event = BusEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            topic: EventTopic::TopicPcPromptAssembled.into(),
+            source_subsystem: SUBSYSTEM_ID.to_owned(),
+            payload: payload_bytes,
+            trace_context: trace_context.to_owned(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let mut client = self.event_bus_client.lock().await;
+        let request = tonic::Request::new(PublishRequest { event: Some(event) });
+
+        match client.publish(request).await {
+            Ok(_) => {
+                tracing::debug!(
+                    subsystem = SUBSYSTEM_ID,
+                    event_type = "event_published",
+                    topic = "TOPIC_PC_PROMPT_ASSEMBLED",
+                    request_id = %request_id,
+                    "prompt assembly event published successfully"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    subsystem = SUBSYSTEM_ID,
+                    event_type = "event_publish_failed",
+                    topic = "TOPIC_PC_PROMPT_ASSEMBLED",
+                    request_id = %request_id,
+                    error = %e,
+                    "failed to publish prompt assembly event, continuing anyway"
+                );
+                // Event publishing is best-effort — don't fail the RPC
+            }
+        }
+    }
+}
+
+/// Truncate a string to a maximum length with ellipsis.
+fn truncate_preview(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len])
     }
 }
 
@@ -129,9 +214,16 @@ mod tests {
         })
     }
 
+    fn test_event_bus_client() -> EventBusServiceClient<tonic::transport::Channel> {
+        // Create a lazy connection client for tests (won't actually connect)
+        let channel = tonic::transport::Channel::from_static("http://127.0.0.1:50051")
+            .connect_lazy();
+        EventBusServiceClient::new(channel)
+    }
+
     #[tokio::test]
     async fn test_assemble_prompt_success() {
-        let service = PromptComposerGrpcService::new(test_config());
+        let service = PromptComposerGrpcService::new(test_config(), test_event_bus_client());
 
         let context = PromptContext {
             soulbox_snapshot: "soul data".into(),
@@ -170,7 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_assemble_prompt_missing_context() {
-        let service = PromptComposerGrpcService::new(test_config());
+        let service = PromptComposerGrpcService::new(test_config(), test_event_bus_client());
 
         let request = Request::new(AssemblePromptRequest {
             context: None, // Missing!
@@ -187,7 +279,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_assemble_prompt_missing_model_profile() {
-        let service = PromptComposerGrpcService::new(test_config());
+        let service = PromptComposerGrpcService::new(test_config(), test_event_bus_client());
 
         let context = PromptContext {
             soulbox_snapshot: "soul".into(),
@@ -216,7 +308,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_assemble_prompt_auto_generates_request_id() {
-        let service = PromptComposerGrpcService::new(test_config());
+        let service = PromptComposerGrpcService::new(test_config(), test_event_bus_client());
 
         let context = PromptContext {
             soulbox_snapshot: "soul".into(),
@@ -251,7 +343,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_assemble_prompt_budget_exhausted() {
-        let service = PromptComposerGrpcService::new(test_config());
+        let service = PromptComposerGrpcService::new(test_config(), test_event_bus_client());
 
         // Create a context where sacred content exceeds budget
         let context = PromptContext {

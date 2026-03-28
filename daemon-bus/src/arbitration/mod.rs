@@ -55,7 +55,6 @@ pub enum EscalationOutcome {
 
 /// A pending escalation request sitting in the queue.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields read during queue priority sorting in grant_next_in_queue — full implementation pending.
 struct QueuedEscalation {
     escalation_id: String,
     subsystem_id: String,
@@ -96,7 +95,6 @@ struct ArbitrationState {
 /// Snapshot of the active escalation — excludes the `JoinHandle` so it can
 /// live behind `RwLock` without `Send` issues on the handle.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // granted_duration_ms read in diagnostics logging — full implementation pending.
 struct ActiveEscalationSnapshot {
     escalation_id: String,
     subsystem_id: String,
@@ -947,5 +945,59 @@ mod tests {
             .await
             .expect("release should not error");
         assert!(!released);
+    }
+
+    /// Verify that when an escalation expires, the next queued request is
+    /// automatically granted. This test ensures the expiry timer actually fires
+    /// and triggers grant_next_in_queue.
+    #[tokio::test]
+    async fn expiry_grants_next_in_queue() {
+        let bus = EventBus::new(16);
+        let config = ArbitrationConfig {
+            max_escalation_duration_ms: 100,
+            default_escalation_duration_ms: 50,
+            ..test_config()
+        };
+        let arbiter = Arbiter::new(config, bus);
+
+        // Grant tier 2 to the first subsystem with short expiry.
+        let first = arbiter
+            .request_escalation(
+                "first".to_string(),
+                "short hold".to_string(),
+                50,
+                String::new(),
+            )
+            .await
+            .expect("first grant should succeed");
+        assert!(matches!(first, EscalationOutcome::Granted { .. }));
+
+        // Queue a second request.
+        let second = arbiter
+            .request_escalation(
+                "second".to_string(),
+                "waiting".to_string(),
+                50,
+                String::new(),
+            )
+            .await
+            .expect("second request should succeed");
+        assert!(matches!(second, EscalationOutcome::Queued { .. }));
+
+        let status_before = arbiter.get_status().await;
+        assert_eq!(status_before.current_tier_two_holder.as_deref(), Some("first"));
+        assert_eq!(status_before.queue_depth, 1);
+
+        // Wait for the first escalation to expire and the next to be granted.
+        // Use real time instead of paused time for reliability.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let status_after = arbiter.get_status().await;
+        assert_eq!(
+            status_after.current_tier_two_holder.as_deref(),
+            Some("second"),
+            "queued request should be granted after expiry"
+        );
+        assert_eq!(status_after.queue_depth, 0, "queue should be empty");
     }
 }

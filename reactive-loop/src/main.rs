@@ -9,6 +9,7 @@
 //! 6. Publish TOPIC_USER_MESSAGE_RESPONSE
 //! 7. Return response to caller
 
+mod capabilities;
 mod config;
 mod error;
 mod generated;
@@ -340,6 +341,7 @@ async fn async_main() -> i32 {
     let ready_request = tonic::Request::new(BootSignalRequest {
         subsystem_id: SUBSYSTEM_ID.to_owned(),
         signal: BootSignal::ReactiveLoopReady.into(),
+        capabilities: capabilities::get_capabilities(),
     });
 
     match boot_client.signal_ready(ready_request).await {

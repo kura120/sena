@@ -29,6 +29,7 @@
 // Module declarations — named modules only, no mod.rs
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub mod capabilities;
 pub mod config;
 pub mod embedder;
 pub mod engine;
@@ -468,6 +469,31 @@ where
         }
     });
 
+    // ── Subscribe to TOPIC_MEMORY_CONSOLIDATION_REQUESTED in background ──
+    //
+    // CTP publishes this event during deep idle. When it arrives, trigger
+    // the consolidation routine. The subscription runs for the lifetime of
+    // the process — it never terminates on its own, only via shutdown.
+    let config_for_consolidation = Arc::clone(&config);
+    let engine_for_consolidation = Arc::clone(&engine);
+    tokio::spawn(async move {
+        if let Err(error) =
+            receive_consolidation_requests(&config_for_consolidation, engine_for_consolidation)
+                .await
+        {
+            // Consolidation subscription is a best-effort optimization.
+            // If it fails to connect or the stream ends, log it but do not
+            // exit the process — memory-engine continues running without
+            // automatic consolidation.
+            tracing::warn!(
+                subsystem = SUBSYSTEM_ID,
+                component = "consolidation",
+                error_code = %error.code,
+                "consolidation subscription ended — no automatic consolidation until restart"
+            );
+        }
+    });
+
     // ── Step 9: Await shutdown signal ──────────────────────────────────
     tracing::info!(
         subsystem = SUBSYSTEM_ID,
@@ -599,6 +625,98 @@ async fn receive_model_profile(config: &Config) -> Result<ModelCapabilityProfile
         })?
 }
 
+/// Subscribe to TOPIC_MEMORY_CONSOLIDATION_REQUESTED and trigger consolidation
+/// when events arrive from CTP.
+///
+/// This function runs indefinitely until the event stream ends or a
+/// connection error occurs. It is spawned as a background task and does not
+/// block the main execution flow.
+async fn receive_consolidation_requests<E, X>(
+    config: &Config,
+    engine: Arc<MemoryEngine<E, X>>,
+) -> Result<(), SenaError>
+where
+    E: ech0::Embedder + 'static,
+    X: ech0::Extractor + 'static,
+{
+    let mut event_client = EventBusServiceClient::connect(config.grpc.daemon_bus_address.clone())
+        .await
+        .map_err(|connect_error| {
+            SenaError::new(
+                ErrorCode::GrpcFailure,
+                "failed to connect to daemon-bus event bus for consolidation subscription",
+            )
+            .with_debug_context(format!("connect error: {}", connect_error))
+        })?;
+
+    let subscribe_request = tonic::Request::new(SubscribeRequest {
+        topics: vec![EventTopic::TopicMemoryConsolidationRequested.into()],
+        subscriber_id: SUBSYSTEM_ID.to_owned(),
+    });
+
+    let mut event_stream = event_client
+        .subscribe(subscribe_request)
+        .await
+        .map_err(|subscribe_error| {
+            SenaError::new(
+                ErrorCode::GrpcFailure,
+                "failed to subscribe to TOPIC_MEMORY_CONSOLIDATION_REQUESTED",
+            )
+            .with_debug_context(format!("subscribe error: {}", subscribe_error))
+        })?
+        .into_inner();
+
+    tracing::info!(
+        subsystem = SUBSYSTEM_ID,
+        component = "consolidation",
+        "subscribed to TOPIC_MEMORY_CONSOLIDATION_REQUESTED"
+    );
+
+    // Process events until the stream ends or an error occurs.
+    loop {
+        match event_stream.message().await {
+            Ok(Some(bus_event)) => {
+                // Verify this is a consolidation request from CTP.
+                if bus_event.topic == i32::from(EventTopic::TopicMemoryConsolidationRequested) {
+                    tracing::debug!(
+                        subsystem = SUBSYSTEM_ID,
+                        component = "consolidation",
+                        event_id = %bus_event.event_id,
+                        source_subsystem = %bus_event.source_subsystem,
+                        "received TOPIC_MEMORY_CONSOLIDATION_REQUESTED event"
+                    );
+
+                    // Trigger consolidation. If it fails, log the error but
+                    // do not terminate the subscription — the next event
+                    // will trigger another attempt.
+                    if let Err(consolidation_error) = engine.consolidate().await {
+                        tracing::warn!(
+                            subsystem = SUBSYSTEM_ID,
+                            component = "consolidation",
+                            error_code = %consolidation_error.code,
+                            "consolidation failed"
+                        );
+                    }
+                }
+            }
+            Ok(None) => {
+                // Event stream ended cleanly.
+                return Err(SenaError::new(
+                    ErrorCode::GrpcFailure,
+                    "consolidation event stream ended unexpectedly",
+                ));
+            }
+            Err(stream_error) => {
+                return Err(SenaError::new(
+                    ErrorCode::GrpcFailure,
+                    "consolidation event stream error",
+                )
+                .with_debug_context(format!("stream error: {}", stream_error)));
+            }
+        }
+    }
+}
+
 /// Connect to the daemon-bus event bus service (for publishing events).
 async fn connect_to_daemon_bus(config: &Config) -> Result<DaemonBusClient, SenaError> {
     let timeout = Duration::from_millis(config.grpc.connect_timeout_ms);
@@ -650,6 +768,7 @@ async fn signal_ready(config: &Config) -> Result<(), SenaError> {
     let request = tonic::Request::new(BootSignalRequest {
         subsystem_id: SUBSYSTEM_ID.to_owned(),
         signal: BootSignal::MemoryEngineReady.into(),
+        capabilities: capabilities::get_capabilities(),
     });
 
     boot_client

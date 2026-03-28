@@ -5,6 +5,10 @@ edition = "2021"
 description = "Sena prompt assembly — TOON encoding, sacred content enforcement, context window management"
 publish = false
 
+[lib]
+name = "prompt_composer"
+path = "src/lib.rs"
+
 [[bin]]
 name = "prompt-composer"
 path = "src/main.rs"

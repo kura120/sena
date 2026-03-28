@@ -9,7 +9,7 @@
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Re-run codegen whenever the proto file changes.
-    println!("cargo:rerun-if-changed=../daemon-bus/proto/sena.daemonbus.v1.proto");
+    println!("cargo:rerun-if-changed=../shared/proto/sena.daemonbus.v1.proto");
 
     let protoc_available = which_protoc().is_some();
 
@@ -27,8 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_client(true)
         .out_dir("src/generated")
         .compile_protos(
-            &["../daemon-bus/proto/sena.daemonbus.v1.proto"],
-            &["../daemon-bus/proto"],
+            &["../shared/proto/sena.daemonbus.v1.proto"],
+            &["../shared/proto"],
         )?;
 
     Ok(())

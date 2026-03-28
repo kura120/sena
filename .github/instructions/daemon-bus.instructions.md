@@ -31,12 +31,12 @@ If you find yourself writing logic that makes decisions about Sena's behavior in
 
 ## Proto File Rules
 
-All `.proto` definitions live in `daemon-bus/proto/`. This is the single source of truth for all gRPC contracts across the entire project.
+All `.proto` definitions live in `shared/proto/`. This is the single source of truth for all gRPC contracts across the entire project.
 
-- Never define a proto message or service outside of `daemon-bus/proto/`
+- Never define a proto message or service outside of `shared/proto/`
 - Never add a topic, method, or message without updating the proto file first
 - Proto changes require implementation changes in all affected subsystems in the same PR — never leave a proto change unimplemented
-- Generated code goes in `daemon-bus/src/generated/` — never edit generated files manually
+- Generated code goes in each subsystem's `src/generated/` — never edit generated files manually
 
 ---
 

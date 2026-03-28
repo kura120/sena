@@ -1,0 +1,6 @@
+# lora-manager manifest
+name = "lora-manager"
+language = "python"
+responsibility = "Cognitive Layer: Identity - Reasoning Adaptation"
+ports = [50058]
+signals = ["LORA_MANAGER_READY", "LORA_MANAGER_TRAINING_STARTED", "LORA_MANAGER_TRAINING_COMPLETE"]

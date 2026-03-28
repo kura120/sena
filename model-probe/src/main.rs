@@ -12,6 +12,7 @@
 // Module declarations — named modules only, no mod.rs
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub mod capabilities;
 pub mod config;
 pub mod error;
 pub mod hardware;
@@ -45,6 +46,7 @@ use crate::error::{ErrorCode, SenaError};
 use crate::generated::sena_daemonbus_v1::{
     boot_service_client::BootServiceClient,
     event_bus_service_client::EventBusServiceClient,
+    inference_service_client::InferenceServiceClient,
     BootSignal, BootSignalRequest, BusEvent, EventTopic, PublishRequest,
 };
 
@@ -210,10 +212,16 @@ async fn async_main() -> i32 {
     // memory-engine via gRPC.
     let last_lora_training_score: Option<f64> = None;
 
+    // Create InferenceService client if gRPC channel is available
+    let inference_client = grpc_channel.as_ref().map(|channel| {
+        InferenceServiceClient::new(channel.clone())
+    });
+
     let battery_result = match probes::run_probe_battery(
         &config,
         &model_id,
         last_lora_training_score,
+        inference_client,
     )
     .await
     {
@@ -349,7 +357,7 @@ async fn run_probes_without_grpc(
 ) -> i32 {
     let model_id = derive_model_id(&config.model.model_path);
 
-    let battery_result = probes::run_probe_battery(config, &model_id, None).await;
+    let battery_result = probes::run_probe_battery(config, &model_id, None, None).await;
 
     match battery_result {
         Ok(outcome) => {
@@ -452,6 +460,7 @@ async fn signal_model_profile_ready(
         .signal_ready(BootSignalRequest {
             subsystem_id: "model-probe".to_string(),
             signal: BootSignal::ModelProfileReady.into(),
+            capabilities: capabilities::get_capabilities(),
         })
         .await
         .map_err(|status| {
@@ -715,6 +724,7 @@ mod tests {
                 memory_injection_fidelity: 0.85,
                 graph_extraction: probes::CapabilityLevel::None,
                 lora_training_recommended: false,
+                degraded_probes: vec![],
             },
             hardware_profile: hardware::HardwareProfile {
                 vram_total_mb: 16384,

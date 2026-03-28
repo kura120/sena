@@ -1,3 +1,46 @@
+# MANDATORY READING — Before Every Task
+
+Before writing a single line of code or modifying any file, you MUST:
+
+## Step 1: Read Governance Documents
+1. `docs/PRD.md` — What Sena is and is not
+2. `docs/ARCHITECTURE.md` — Structure law and subsystem contracts
+3. `docs/AI_RULES.md` — Non-negotiables and quality gates
+4. `docs/PLAN.md` — Current milestone and active task
+
+## Step 2: Read Subsystem Memory
+For EVERY subsystem your task touches, read ALL THREE files:
+- `.github/agents/memory/<subsystem>/status.md`
+- `.github/agents/memory/<subsystem>/gaps.md`
+- `.github/agents/memory/<subsystem>/decisions.md`
+
+If any of these files are missing, CREATE THEM from the template at
+`.github/agents/memory/TEMPLATE.md` before proceeding.
+
+## Step 3: Read Subsystem Instructions
+- `.github/instructions/<subsystem>.instructions.md`
+
+## Step 4: Verify Alignment
+Ask yourself:
+- Does this task align with the active milestone in `PLAN.md`?
+- Does this approach comply with `AI_RULES.md`?
+- Does this follow the data flow laws in `ARCHITECTURE.md`?
+- Am I adding a new subsystem? If yes — full admission required first.
+- Am I deviating from any rule? If yes — ADR required first.
+
+## After Your Task
+If your task involved:
+- An architectural decision → update `docs/decisions/` + memory files
+- A new subsystem → verify all 8 admission requirements are met
+- A deviation from PRD/ARCHITECTURE/AI_RULES → write the ADR
+- A change to a subsystem's behavior → update that subsystem's memory files
+- A change to the boot sequence → update daemon-bus config + `PLAN.md`
+
+Failure to update memory files after a task means the next agent
+starts with stale context and will make contradictory decisions.
+
+---
+
 # Sena — Copilot Instructions
 
 ## Agent Memory — Read Before Every Task
@@ -122,7 +165,7 @@ No subsystem self-promotes its own priority. All escalation requests go through 
 | Non-uniform internal structures | JSON |
 | Cross-process contracts | protobuf via gRPC |
 
-Never use JSON where TOON applies. Never define a cross-process contract outside of `daemon-bus/proto/`.
+Never use JSON where TOON applies. Never define a cross-process contract outside of `shared/proto/`.
 
 ---
 

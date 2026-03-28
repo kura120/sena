@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { TitleBar } from "../../components/TitleBar/TitleBar";
 import { IconSubsystemHealth, IconBell, IconReboot, IconChevronRight, IconChevronDown } from "../../components/icons";
 import { CapabilityDetail } from "../../components/CapabilityDetail/CapabilityDetail";
+import { CapabilityChips } from "../../components/CapabilityChips/CapabilityChips";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
 import { KNOWN_SUBSYSTEMS } from "../../constants/panels";
 import { STATUS_COLORS } from "../../constants/colors";
@@ -34,9 +35,24 @@ export function SubsystemHealth() {
   const [collapsed, setCollapsed] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [, setTick] = useState(0);
+  const [verbose, setVerbose] = useState(false);
 
   useWindowDragSave();
   const panelClass = useOverlayAnimation();
+
+  // Load verbose setting on mount
+  useEffect(() => {
+    invoke<boolean>("get_overlay_setting", { key: "verbose_health" })
+      .then((val) => setVerbose(!!val))
+      .catch(() => { /* default false */ });
+  }, []);
+
+  // Listen for verbose setting changes from the Settings panel
+  useTauriEvent<{ key: string; value: unknown }>("overlay-setting-changed", (event) => {
+    if (event.key === "verbose_health") {
+      setVerbose(!!event.value);
+    }
+  });
 
   // Fetch accumulated state from Rust DebugState
   const fetchState = useCallback(() => {
@@ -123,9 +139,29 @@ export function SubsystemHealth() {
   }, []);
 
   const getCapabilities = useCallback((s: SubsystemData): CapabilityBreakdown | null => {
-    // If capabilities are already set, return them
+    // If real capabilities are available, return them in verbose mode
     if (s.capabilities) {
-      return s.capabilities;
+      if (verbose) {
+        return s.capabilities;
+      }
+      // In non-verbose mode, provide a summary
+      const hasDegraded = s.capabilities.degraded.length > 0;
+      if (hasDegraded) {
+        const summary = STRINGS.VERBOSE_DEGRADED_SUMMARY.replace(
+          "{count}",
+          String(s.capabilities.degraded.length),
+        );
+        return {
+          granted: [],
+          degraded: [{ label: summary }],
+          denied: [],
+        };
+      }
+      return {
+        granted: [{ label: STRINGS.CAPABILITY_ALL_OPERATIONAL }],
+        degraded: [],
+        denied: [],
+      };
     }
 
     // Generate default capabilities based on status
@@ -139,18 +175,18 @@ export function SubsystemHealth() {
       return {
         granted: [],
         degraded: [],
-        denied: [{ label: "Did not start within timeout" }],
+        denied: [{ label: STRINGS.CAPABILITY_NOT_STARTED }],
       };
     } else if (s.status === "Degraded") {
       return {
         granted: [],
-        degraded: [{ label: "Running in degraded mode" }],
+        degraded: [{ label: STRINGS.STATUS_DEGRADED }],
         denied: [],
       };
     }
 
     return null;
-  }, []);
+  }, [verbose]);
 
   const extraActions = (
     <>
@@ -202,6 +238,12 @@ export function SubsystemHealth() {
           const capabilities = getCapabilities(s);
           const ChevronIcon = isExpanded ? IconChevronDown : IconChevronRight;
 
+          // Derive display status: if real capabilities have degraded items, show Degraded
+          const hasDegradedCaps = s.capabilities && s.capabilities.degraded.length > 0;
+          const displayStatus = (s.status === "Ready" && hasDegradedCaps)
+            ? STRINGS.STATUS_DEGRADED
+            : s.status;
+
           return (
             <div key={s.name}>
               <div 
@@ -212,7 +254,7 @@ export function SubsystemHealth() {
               >
                 <div 
                   className="w-2 h-2 rounded-full mr-3 shrink-0"
-                  style={{ background: STATUS_COLORS[s.status] || STATUS_COLORS.Unknown }}
+                  style={{ background: STATUS_COLORS[displayStatus] || STATUS_COLORS.Unknown }}
                 />
                 <span 
                   className="font-medium truncate"
@@ -224,9 +266,9 @@ export function SubsystemHealth() {
                   <div className="flex flex-col items-end">
                     <span 
                       className="text-xs font-medium"
-                      style={{ color: STATUS_COLORS[s.status] || STATUS_COLORS.Unknown }}
+                      style={{ color: STATUS_COLORS[displayStatus] || STATUS_COLORS.Unknown }}
                     >
-                      {s.status}
+                      {displayStatus}
                     </span>
                     <span 
                       className="text-[11px]"
@@ -249,7 +291,9 @@ export function SubsystemHealth() {
                 </div>
               </div>
               {isExpanded && capabilities && (
-                <CapabilityDetail capabilities={capabilities} />
+                verbose
+                  ? <CapabilityChips capabilities={capabilities} />
+                  : <CapabilityDetail capabilities={capabilities} />
               )}
             </div>
           );

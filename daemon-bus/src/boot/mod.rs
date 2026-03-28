@@ -71,6 +71,8 @@ struct BootEntry {
     signaled: bool,
     /// Config key name used for supervisor operations.
     config_key: String,
+    /// Capabilities reported by this subsystem when it signaled ready.
+    capabilities: Vec<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,6 +127,7 @@ impl BootOrchestrator {
                 depends_on: subsystem_config.depends_on.clone(),
                 signaled: false,
                 config_key: config_key.clone(),
+                capabilities: Vec::new(),
             };
 
             tracing::info!(
@@ -152,6 +155,7 @@ impl BootOrchestrator {
                     depends_on: subsystem_config.depends_on.clone(),
                     signaled: false,
                     config_key: config_key.clone(),
+                    capabilities: Vec::new(),
                 };
                 entries.insert(skip_signal.clone(), skip_entry);
             }
@@ -198,8 +202,18 @@ impl BootOrchestrator {
 
         // Step 1: daemon-bus signals itself as ready — it is the root of the
         // dependency graph and does not depend on anything.
-        self.signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
-            .await?;
+        self.signal_ready(
+            "daemon_bus",
+            boot_signal_name(BootSignal::DaemonBusReady),
+            vec![
+                "event_bus".to_string(),
+                "boot_orchestration".to_string(),
+                "process_supervision".to_string(),
+                "priority_arbitration".to_string(),
+                "watchdog".to_string(),
+            ],
+        )
+        .await?;
 
         // Step 2: spawn all boot-time subsystems via the supervisor.
         let spawn_list = self.inner.supervisor.boot_spawn_list();
@@ -261,7 +275,12 @@ impl BootOrchestrator {
     ///
     /// This is the entry point for the gRPC `BootService.SignalReady` handler
     /// and for internal signals (e.g. DAEMON_BUS_READY from the orchestrator itself).
-    pub async fn signal_ready(&self, subsystem_id: &str, signal_name: &str) -> SenaResult<bool> {
+    pub async fn signal_ready(
+        &self,
+        subsystem_id: &str,
+        signal_name: &str,
+        capabilities: Vec<String>,
+    ) -> SenaResult<bool> {
         // Check if boot is already terminal (Ready or Failed).
         {
             let current_phase = self.current_phase();
@@ -299,12 +318,14 @@ impl BootOrchestrator {
             let mut entries = self.inner.entries.write().await;
             if let Some(entry) = entries.get_mut(signal_name) {
                 entry.signaled = true;
+                entry.capabilities = capabilities.clone();
 
                 tracing::info!(
                     subsystem = %subsystem_id,
                     event_type = "boot_signal_received",
                     signal = %signal_name,
                     required = entry.required,
+                    capabilities = ?capabilities,
                     "boot signal received"
                 );
 
@@ -313,6 +334,7 @@ impl BootOrchestrator {
                 if primary_signal != signal_name {
                     if let Some(primary_entry) = entries.get_mut(&primary_signal) {
                         primary_entry.signaled = true;
+                        primary_entry.capabilities = capabilities;
                     }
                 }
             } else {
@@ -762,13 +784,21 @@ mod tests {
 
         // Simulate daemon-bus ready (normally done inside run()).
         orchestrator
-            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
+            .signal_ready(
+                "daemon_bus",
+                boot_signal_name(BootSignal::DaemonBusReady),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
 
         // Signal both required subsystems.
         orchestrator
-            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
+            .signal_ready(
+                "memory_engine",
+                boot_signal_name(BootSignal::MemoryEngineReady),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
 
@@ -778,7 +808,7 @@ mod tests {
         );
 
         orchestrator
-            .signal_ready("ctp", boot_signal_name(BootSignal::CtpReady))
+            .signal_ready("ctp", boot_signal_name(BootSignal::CtpReady), vec![])
             .await
             .expect("signal should succeed");
 
@@ -804,21 +834,33 @@ mod tests {
         let orchestrator = BootOrchestrator::new(&config, bus, supervisor);
 
         orchestrator
-            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
+            .signal_ready(
+                "daemon_bus",
+                boot_signal_name(BootSignal::DaemonBusReady),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
         orchestrator
-            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
+            .signal_ready(
+                "memory_engine",
+                boot_signal_name(BootSignal::MemoryEngineReady),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
         orchestrator
-            .signal_ready("ctp", boot_signal_name(BootSignal::CtpReady))
+            .signal_ready("ctp", boot_signal_name(BootSignal::CtpReady), vec![])
             .await
             .expect("signal should succeed");
 
         // Use the skip signal instead of the primary signal.
         orchestrator
-            .signal_ready("lora_manager", boot_signal_name(BootSignal::LoraSkipped))
+            .signal_ready(
+                "lora_manager",
+                boot_signal_name(BootSignal::LoraSkipped),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
 
@@ -846,7 +888,7 @@ mod tests {
 
         // Start the timeout watchers manually (normally done in run()).
         orchestrator
-            .signal_ready("daemon_bus", "DAEMON_BUS_READY")
+            .signal_ready("daemon_bus", "DAEMON_BUS_READY", vec![])
             .await
             .expect("signal should succeed");
         orchestrator.start_subsystem_timeout_watchers().await;
@@ -882,18 +924,26 @@ mod tests {
         let orchestrator = BootOrchestrator::new(&config, bus, supervisor);
 
         orchestrator
-            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
+            .signal_ready(
+                "daemon_bus",
+                boot_signal_name(BootSignal::DaemonBusReady),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
         orchestrator.start_subsystem_timeout_watchers().await;
 
         // Signal required subsystems.
         orchestrator
-            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
+            .signal_ready(
+                "memory_engine",
+                boot_signal_name(BootSignal::MemoryEngineReady),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
         orchestrator
-            .signal_ready("ctp", boot_signal_name(BootSignal::CtpReady))
+            .signal_ready("ctp", boot_signal_name(BootSignal::CtpReady), vec![])
             .await
             .expect("signal should succeed");
 
@@ -917,11 +967,19 @@ mod tests {
         let orchestrator = BootOrchestrator::new(&test_boot_config(), bus, supervisor);
 
         orchestrator
-            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
+            .signal_ready(
+                "daemon_bus",
+                boot_signal_name(BootSignal::DaemonBusReady),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
         orchestrator
-            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
+            .signal_ready(
+                "memory_engine",
+                boot_signal_name(BootSignal::MemoryEngineReady),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
 
@@ -942,17 +1000,29 @@ mod tests {
         let orchestrator = BootOrchestrator::new(&test_boot_config(), bus, supervisor);
 
         orchestrator
-            .signal_ready("daemon_bus", boot_signal_name(BootSignal::DaemonBusReady))
+            .signal_ready(
+                "daemon_bus",
+                boot_signal_name(BootSignal::DaemonBusReady),
+                vec![],
+            )
             .await
             .expect("signal should succeed");
 
         // Signal memory_engine twice — second should be harmless.
         orchestrator
-            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
+            .signal_ready(
+                "memory_engine",
+                boot_signal_name(BootSignal::MemoryEngineReady),
+                vec![],
+            )
             .await
             .expect("first signal should succeed");
         orchestrator
-            .signal_ready("memory_engine", boot_signal_name(BootSignal::MemoryEngineReady))
+            .signal_ready(
+                "memory_engine",
+                boot_signal_name(BootSignal::MemoryEngineReady),
+                vec![],
+            )
             .await
             .expect("duplicate signal should succeed");
 

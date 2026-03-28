@@ -20,6 +20,7 @@
 //! 11. Await shutdown signal
 
 pub mod activity;
+pub mod capabilities;
 pub mod config;
 pub mod context_assembler;
 pub mod error;
@@ -212,6 +213,7 @@ async fn async_main() -> i32 {
     let ready_request = tonic::Request::new(BootSignalRequest {
         subsystem_id: SUBSYSTEM_ID.to_owned(),
         signal: BootSignal::CtpReady.into(),
+        capabilities: capabilities::get_capabilities(),
     });
 
     match boot_client.signal_ready(ready_request).await {
@@ -380,6 +382,7 @@ async fn best_effort_signal(
     let request = tonic::Request::new(BootSignalRequest {
         subsystem_id: SUBSYSTEM_ID.to_owned(),
         signal: signal.into(),
+        capabilities: capabilities::get_capabilities(),
     });
 
     match boot_client.signal_ready(request).await {

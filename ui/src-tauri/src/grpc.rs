@@ -770,6 +770,7 @@ pub async fn signal_ui_ready(
     let request = tonic::Request::new(BootSignalRequest {
         subsystem_id: "ui".to_string(),
         signal: BootSignal::UiReady as i32,
+        capabilities: crate::capabilities::get_capabilities(),
     });
 
     client.signal_ready(request).await?;

@@ -11,7 +11,10 @@ use std::time::Instant;
 
 use crate::config::GraphExtractionProbeConfig;
 use crate::error::{ErrorCode, SenaError, SenaResult};
+use crate::generated::sena_daemonbus_v1::inference_service_client::InferenceServiceClient;
+use crate::generated::sena_daemonbus_v1::{CompleteRequest, CompleteResponse};
 use crate::probes::{CapabilityLevel, ProbeResult};
+use tonic::transport::Channel;
 
 /// Run the graph extraction capability probe against the active model.
 ///
@@ -21,28 +24,54 @@ use crate::probes::{CapabilityLevel, ProbeResult};
 ///
 /// # Arguments
 /// * `config` — probe-specific configuration (prompt, schema, thresholds)
+/// * `inference_client` — optional gRPC client to InferenceService; if None, degrades to stub
+///
+/// # Graceful Degradation
+/// When `inference_client` is None or inference calls fail, the probe:
+/// 1. Logs a warning with `tracing::warn!`
+/// 2. Returns CapabilityLevel::None with score 0.0
+/// 3. Sets `degraded: true` in the result
+/// 4. Does NOT return an error (error would abort the battery)
 ///
 /// # Returns
 /// A `ProbeResult` with the raw score and derived `CapabilityLevel`.
-pub async fn run(config: &GraphExtractionProbeConfig) -> SenaResult<ProbeResult> {
+pub async fn run(
+    config: &GraphExtractionProbeConfig,
+    inference_client: Option<InferenceServiceClient<Channel>>,
+) -> SenaResult<ProbeResult> {
     let start = Instant::now();
 
-    // TODO(implementation): Send config.probe_prompt to the model via llama-cpp-rs
-    // and validate the response against config.expected_schema.
-    //
-    // Scoring logic:
-    //   1. Parse the model response as JSON
-    //   2. Check presence of required top-level keys ("nodes", "edges")
-    //   3. Check that each node has required fields (id, label, type)
-    //   4. Check that each edge has required fields (source, target, relation)
-    //   5. Score = fraction of required schema elements that are present and valid
-    //   6. Map score to CapabilityLevel via config thresholds
-    //
-    // For now, return a stub result that signals the probe ran but detected
-    // no capability. This ensures downstream subsystems (ech0) default to
-    // vector-only mode until real inference is wired up.
+    let degraded = inference_client.is_none();
+    
+    if degraded {
+        tracing::warn!(
+            subsystem = "model_probe",
+            probe_name = "graph_extraction",
+            reason = "inference_unavailable",
+            "probe degraded to stub — InferenceService client not available"
+        );
+    }
 
-    let raw_score = 0.0_f64;
+    let raw_score = if let Some(mut client) = inference_client {
+        // Real inference path
+        match run_graph_extraction_with_inference(&mut client, config).await {
+            Ok(score) => score,
+            Err(inference_error) => {
+                tracing::warn!(
+                    subsystem = "model_probe",
+                    probe_name = "graph_extraction",
+                    event_type = "inference_failed",
+                    error = %inference_error,
+                    "inference call failed — returning degraded result"
+                );
+                0.0 // Degrade to zero capability on failure
+            }
+        }
+    } else {
+        // Degraded path — stub logic
+        0.0
+    };
+
     let duration = start.elapsed();
 
     let capability_level = score_to_capability_level(
@@ -58,6 +87,7 @@ pub async fn run(config: &GraphExtractionProbeConfig) -> SenaResult<ProbeResult>
         score = raw_score,
         result = %capability_level,
         duration_ms = duration.as_millis() as u64,
+        degraded = degraded,
         "graph extraction probe completed"
     );
 
@@ -66,7 +96,45 @@ pub async fn run(config: &GraphExtractionProbeConfig) -> SenaResult<ProbeResult>
         raw_score,
         capability_level: Some(capability_level),
         duration,
+        degraded,
     })
+}
+
+/// Run graph extraction with real inference via InferenceService.Complete.
+///
+/// Sends the probe prompt to the model, gets the response, and validates
+/// it against the expected JSON schema.
+///
+/// Returns the validation score (0.0–1.0) or an error if inference fails.
+async fn run_graph_extraction_with_inference(
+    client: &mut InferenceServiceClient<Channel>,
+    config: &GraphExtractionProbeConfig,
+) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
+    // Call InferenceService.Complete
+    let request = CompleteRequest {
+        prompt: config.probe_prompt.clone(),
+        model_id: String::new(), // empty = active model
+        max_tokens: 300,
+        temperature: 0.0, // deterministic
+        priority: 3, // Standard priority
+        request_id: uuid::Uuid::new_v4().to_string(),
+    };
+    
+    let response: CompleteResponse = client.complete(request).await?.into_inner();
+    
+    tracing::debug!(
+        subsystem = "model_probe",
+        probe_name = "graph_extraction",
+        event_type = "inference_response_received",
+        response_length = response.text.len(),
+        "received graph extraction response from inference"
+    );
+    
+    // Validate the response using the existing validation function
+    // Note: we're not using expected_schema string yet, validation is hardcoded
+    let score = validate_graph_output(&response.text, &config.expected_schema)?;
+    
+    Ok(score)
 }
 
 /// Map a raw score to a `CapabilityLevel` using config-driven thresholds.

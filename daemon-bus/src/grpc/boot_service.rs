@@ -84,6 +84,7 @@ impl BootService for BootServiceHandler {
             event_type = "boot_signal_grpc_received",
             subsystem_id = %subsystem_id,
             signal = %signal_name,
+            capabilities = ?req.capabilities,
             "received boot signal via gRPC"
         );
 
@@ -91,7 +92,7 @@ impl BootService for BootServiceHandler {
         // the signal was accepted, Ok(false) if boot has already failed.
         let acknowledged = self
             .boot_orchestrator
-            .signal_ready(&subsystem_id, signal_name)
+            .signal_ready(&subsystem_id, signal_name, req.capabilities)
             .await
             .map_err(|err: SenaError| {
                 tracing::error!(

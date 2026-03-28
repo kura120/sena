@@ -104,9 +104,18 @@ impl MessageHandler {
 
         let latency_ms = start_time.elapsed().as_millis() as u64;
 
-        // Step 5: Publish TOPIC_USER_MESSAGE_RESPONSE
-        self.publish_user_message_response(&parsed.final_response, trace_context, request_id)
-            .await?;
+        // Step 5: Publish TOPIC_USER_MESSAGE_RESPONSE with full turn metadata
+        self.publish_user_message_response(
+            message,
+            &parsed.final_response,
+            &inference_result.model_id,
+            latency_ms,
+            inference_result.tokens_prompt,
+            inference_result.tokens_generated,
+            trace_context,
+            request_id,
+        )
+        .await?;
 
         // Step 6: Write conversation turn to memory-engine (best-effort)
         self.write_conversation_turn(message, &parsed.final_response, trace_context, request_id)
@@ -141,11 +150,19 @@ impl MessageHandler {
         trace_context: &str,
         request_id: &str,
     ) -> Result<(), ReactiveLoopError> {
+        // Construct JSON payload with message metadata
+        let payload_json = serde_json::json!({
+            "content": message,
+            "request_id": request_id,
+        });
+
+        let payload_bytes = payload_json.to_string().into_bytes();
+
         let event = BusEvent {
             event_id: uuid::Uuid::new_v4().to_string(),
             topic: EventTopic::TopicUserMessageReceived.into(),
             source_subsystem: SUBSYSTEM_ID.to_owned(),
-            payload: message.as_bytes().to_vec(),
+            payload: payload_bytes,
             trace_context: trace_context.to_owned(),
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
@@ -179,18 +196,37 @@ impl MessageHandler {
         }
     }
 
-    /// Publish TOPIC_USER_MESSAGE_RESPONSE event.
+    /// Publish TOPIC_USER_MESSAGE_RESPONSE event with full conversation turn metadata.
     async fn publish_user_message_response(
         &self,
+        user_message: &str,
         response: &str,
+        model_id: &str,
+        latency_ms: u64,
+        tokens_prompt: u32,
+        tokens_generated: u32,
         trace_context: &str,
         request_id: &str,
     ) -> Result<(), ReactiveLoopError> {
+        // Construct JSON payload with full turn metadata
+        // Note: Don't include full message content in logs, only metadata
+        let payload_json = serde_json::json!({
+            "user_message": user_message,
+            "response": response,
+            "model_id": model_id,
+            "latency_ms": latency_ms,
+            "tokens_prompt": tokens_prompt,
+            "tokens_generated": tokens_generated,
+            "request_id": request_id,
+        });
+
+        let payload_bytes = payload_json.to_string().into_bytes();
+
         let event = BusEvent {
             event_id: uuid::Uuid::new_v4().to_string(),
             topic: EventTopic::TopicUserMessageResponse.into(),
             source_subsystem: SUBSYSTEM_ID.to_owned(),
-            payload: response.as_bytes().to_vec(),
+            payload: payload_bytes,
             trace_context: trace_context.to_owned(),
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
@@ -205,6 +241,8 @@ impl MessageHandler {
                     event_type = "event_published",
                     topic = "TOPIC_USER_MESSAGE_RESPONSE",
                     request_id = %request_id,
+                    latency_ms = latency_ms,
+                    tokens_generated = tokens_generated,
                     "event published successfully"
                 );
                 Ok(())

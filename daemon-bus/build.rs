@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // with the real generated code.
 
     // Re-run codegen whenever the proto file changes.
-    println!("cargo:rerun-if-changed=proto/sena.daemonbus.v1.proto");
+    println!("cargo:rerun-if-changed=../shared/proto/sena.daemonbus.v1.proto");
     
     let protoc_available = which_protoc().is_some();
 
@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(true)
         .build_client(true)
         .out_dir("src/generated")
-        .compile_protos(&["proto/sena.daemonbus.v1.proto"], &["proto"])?;
+        .compile_protos(&["../shared/proto/sena.daemonbus.v1.proto"], &["../shared/proto"])?;
 
     Ok(())
 }

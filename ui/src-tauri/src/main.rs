@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod capabilities;
 mod commands;
 mod config;
 mod daemon_launcher;

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { SettingsField } from "../../../components/Settings/SettingsField";
+import { STRINGS } from "../../../constants/strings";
 
 interface TabProps {
   onDirtyChange: (dirty: boolean, restartDirty: boolean) => void;
@@ -31,8 +32,10 @@ export function LoggingTab({ onDirtyChange, registerSaveHandler }: TabProps) {
   const [configs, setConfigs] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [modified, setModified] = useState<Record<string, Record<string, any>>>({});
+  const [verboseHealth, setVerboseHealth] = useState(false);
 
   useEffect(() => {
+    // Load subsystem configs
     Promise.all(SUBSYSTEMS.map(s => 
         invoke("read_subsystem_config", { subsystem: s })
             .then(data => ({ name: s, data }))
@@ -48,6 +51,11 @@ export function LoggingTab({ onDirtyChange, registerSaveHandler }: TabProps) {
         setConfigs(newConfigs);
         setLoading(false);
     });
+
+    // Load verbose health setting
+    invoke<any>("get_overlay_setting", { key: "verbose_health" })
+      .then((val) => setVerboseHealth(!!val))
+      .catch(() => { /* default false */ });
   }, []);
 
   useEffect(() => {
@@ -107,9 +115,24 @@ export function LoggingTab({ onDirtyChange, registerSaveHandler }: TabProps) {
 
   if (loading) return <div className="settings-loading">Loading...</div>;
 
+  const handleVerboseToggle = (checked: boolean) => {
+    setVerboseHealth(checked);
+    invoke("set_overlay_setting", { key: "verbose_health", value: checked })
+      .catch((e: unknown) => console.error("Failed to save verbose_health setting:", e));
+  };
+
   return (
     <div className="settings-tab-content">
-      <h3 className="settings-section-title">Subsystem Logging Levels</h3>
+      <h3 className="settings-section-title">{STRINGS.VERBOSE_HEALTH_LABEL}</h3>
+      <SettingsField
+        label={STRINGS.VERBOSE_HEALTH_LABEL}
+        description={STRINGS.VERBOSE_HEALTH_DESC}
+        value={verboseHealth}
+        onChange={handleVerboseToggle}
+        type="toggle"
+      />
+
+      <h3 className="settings-section-title" style={{ marginTop: 24 }}>Subsystem Logging Levels</h3>
       <div style={{ marginBottom: 16, fontSize: '13px', color: 'var(--text-tertiary)' }}>
           All logging level changes require a restart of the respective subsystem.
       </div>

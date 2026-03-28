@@ -58,6 +58,7 @@ pub async fn run(
                 raw_score: score,
                 capability_level: Some(capability),
                 duration,
+                degraded: true, // TODO: Implement real inference probe
             })
         }
         Ok(Err(probe_error)) => {
@@ -76,6 +77,7 @@ pub async fn run(
                 raw_score: 0.0,
                 capability_level: Some(CapabilityLevel::None),
                 duration,
+                degraded: true,
             })
         }
         Err(_timeout) => {
@@ -93,6 +95,7 @@ pub async fn run(
                 raw_score: 0.0,
                 capability_level: Some(CapabilityLevel::None),
                 duration,
+                degraded: true,
             })
         }
     }

@@ -1,0 +1,6 @@
+# platform-windows manifest
+name = "platform-windows"
+language = "csharp"
+responsibility = "OS Layer: Windows Platform Hooks"
+ports = [50060]
+signals = ["PLATFORM_WINDOWS_READY", "PLATFORM_WINDOWS_INPUT_HOOK_ACTIVE"]

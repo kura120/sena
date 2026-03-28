@@ -243,7 +243,7 @@ Err(error) => {
 
 ## ModelCapabilityProfile and HardwareProfile
 
-Never add fields to either profile without updating `daemon-bus/proto/` first.
+Never add fields to either profile without updating `shared/proto/` first.
 
 ```rust
 pub struct ModelCapabilityProfile {

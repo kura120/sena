@@ -1,0 +1,66 @@
+.capability-chips {
+  padding-left: 12px;
+  margin-left: 6px;
+  padding-top: 4px;
+  padding-bottom: 8px;
+  border-left: 1px solid var(--border);
+  animation: slideDown 0.2s ease-out;
+}
+
+.capability-chips-summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  padding-left: 4px;
+}
+
+.capability-chips-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 4px;
+  margin-bottom: 4px;
+}
+
+.capability-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.capability-chip--granted {
+  background: color-mix(in srgb, var(--capability-granted) 15%, transparent);
+  color: var(--capability-granted);
+  border: 1px solid color-mix(in srgb, var(--capability-granted) 30%, transparent);
+}
+
+.capability-chip--degraded {
+  background: color-mix(in srgb, var(--capability-degraded) 15%, transparent);
+  color: var(--capability-degraded);
+  border: 1px solid color-mix(in srgb, var(--capability-degraded) 30%, transparent);
+}
+
+.capability-chip--denied {
+  background: color-mix(in srgb, var(--capability-denied) 15%, transparent);
+  color: var(--capability-denied);
+  border: 1px solid color-mix(in srgb, var(--capability-denied) 30%, transparent);
+}
+
+.capability-chip-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.capability-chips-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding-left: 8px;
+}

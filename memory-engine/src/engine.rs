@@ -532,6 +532,46 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
         self.episodic.read().await
     }
 
+    /// Trigger memory consolidation during deep idle.
+    ///
+    /// This method is invoked when a TOPIC_MEMORY_CONSOLIDATION_REQUESTED
+    /// event arrives from CTP. For Phase 1, consolidation is a no-op stub
+    /// that logs the trigger. In Phase 2, this will:
+    ///
+    /// - Promote high-importance short-term entries to long-term
+    /// - Compact or merge episodic entries with low importance scores
+    /// - Trigger decay updates for entries approaching the decay floor
+    ///
+    /// The priority is always Background — consolidation never preempts
+    /// user-facing operations.
+    pub async fn consolidate(&self) -> SenaResult<()> {
+        let start = Instant::now();
+        let operation = "consolidate";
+
+        tracing::info!(
+            subsystem = "memory_engine",
+            tier = "all",
+            operation = operation,
+            priority = %Priority::Background,
+            "consolidation triggered — Phase 1 stub (no-op)"
+        );
+
+        // Phase 2: Implement actual consolidation logic here.
+        // For now, just log and return success.
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        log_operation(
+            "all",
+            operation,
+            &Priority::Background,
+            duration_ms,
+            self.config.logging.slow_operation_threshold_ms,
+        );
+
+        Ok(())
+    }
+
     /// Gracefully shut down the engine — drains the write queue.
     pub async fn shutdown(&self) {
         tracing::info!(
@@ -628,5 +668,29 @@ mod tests {
         let cloned = entry.clone();
         assert_eq!(cloned.text, "test content");
         assert_eq!(cloned.target_tier, TargetTier::ShortTerm);
+    }
+
+    /// Test documenting that consolidate method exists and will be called
+    /// by the subscription handler when TOPIC_MEMORY_CONSOLIDATION_REQUESTED
+    /// arrives from CTP. Full integration testing requires a running daemon-bus
+    /// and is deferred to integration tests.
+    ///
+    /// Phase 2 will test actual consolidation behavior (promotions, compaction).
+    #[test]
+    fn consolidate_method_signature_exists() {
+        // This test documents the contract: consolidate() exists, is async,
+        // takes no parameters beyond &self, and returns SenaResult<()>.
+        // When Phase 2 implements real consolidation logic, this test will
+        // be replaced with behavioral tests that verify tier promotions and
+        // memory compaction.
+        //
+        // For now, we just verify the method can be referenced without error.
+        fn _check_signature<E: ech0::Embedder + 'static, X: ech0::Extractor + 'static>(
+            engine: &MemoryEngine<E, X>,
+        ) -> core::pin::Pin<
+            Box<dyn std::future::Future<Output = SenaResult<()>> + Send + '_>,
+        > {
+            Box::pin(engine.consolidate())
+        }
     }
 }

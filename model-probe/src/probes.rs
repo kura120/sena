@@ -97,6 +97,10 @@ pub struct ModelCapabilityProfile {
     /// Whether reasoning gap detection recommends a LoRA training cycle.
     /// Set by comparing current reasoning_quality against prior training score.
     pub lora_training_recommended: bool,
+    /// List of probe names that ran in degraded mode (formula/stub fallback
+    /// due to inference unavailability). Empty list means all probes used real inference.
+    /// When non-empty, downstream systems should treat capabilities as conservative estimates.
+    pub degraded_probes: Vec<String>,
 }
 
 /// Outcome of the full probe battery — carries both profiles and any
@@ -126,6 +130,7 @@ pub struct ProbeBatteryOutcome {
 /// * `model_id` — identifier for the active model
 /// * `last_lora_training_score` — reasoning score from the last LoRA training run,
 ///   if available. `None` on first boot or when no training has occurred.
+/// * `inference_client` — optional gRPC client to InferenceService; if None, all probes degrade
 ///
 /// # Errors
 /// Returns `SenaError` with `ProbeBatteryFailed` if a critical probe fails in a
@@ -135,6 +140,7 @@ pub async fn run_probe_battery(
     config: &ModelProbeConfig,
     model_id: &str,
     last_lora_training_score: Option<f64>,
+    inference_client: Option<crate::generated::sena_daemonbus_v1::inference_service_client::InferenceServiceClient<tonic::transport::Channel>>,
 ) -> SenaResult<ProbeBatteryOutcome> {
     let battery_start = Instant::now();
     let per_probe_timeout_ms = config.probes.per_probe_timeout_ms;
@@ -154,6 +160,10 @@ pub async fn run_probe_battery(
 
     let model_id_owned = model_id.to_string();
     let config_clone_for_lora = config.clone();
+    
+    // Clone the inference client for each probe that needs it
+    let context_window_client = inference_client.clone();
+    let graph_extraction_client = inference_client;
 
     let (
         context_window_result,
@@ -167,6 +177,7 @@ pub async fn run_probe_battery(
         context_window::run(
             &config.probes.context_window,
             config.model.advertised_context_length,
+            context_window_client,
             per_probe_timeout_ms,
         ),
         structured_output::run(&config.probes.structured_output, per_probe_timeout_ms),
@@ -178,13 +189,23 @@ pub async fn run_probe_battery(
         ),
         lora_compat::run(&config_clone_for_lora),
         memory_fidelity::run(&config.probes.memory_fidelity),
-        graph_extraction::run(&config.probes.graph_extraction),
+        graph_extraction::run(&config.probes.graph_extraction, graph_extraction_client),
     );
 
     // ── Phase 2: Extract scores, log failures, derive capabilities ──────
     //
     // Every probe error is logged and scored as the most conservative value.
     // No probe failure aborts the battery — the profile is always assembled.
+
+    // Track which probes ran in degraded mode
+    let mut degraded_probes = Vec::new();
+    
+    // Check context_window result for degradation before moving it
+    if let Ok(ref cw_result) = context_window_result {
+        if cw_result.degraded {
+            degraded_probes.push("context_window".to_string());
+        }
+    }
 
     // Context window
     let (context_window_value, pre_rot_threshold) = match context_window_result {
@@ -200,6 +221,13 @@ pub async fn run_probe_battery(
         }
     };
 
+    // Structured output - check degradation first
+    if let Ok(ref so_result) = structured_output_result {
+        if so_result.degraded {
+            degraded_probes.push("structured_output".to_string());
+        }
+    }
+
     // Structured output
     let structured_output_capability = match structured_output_result {
         Ok(ref result) => result
@@ -210,6 +238,13 @@ pub async fn run_probe_battery(
             CapabilityLevel::None
         }
     };
+
+    // Instruction following - check degradation first
+    if let Ok(ref if_result) = instruction_following_result {
+        if if_result.degraded {
+            degraded_probes.push("instruction_following".to_string());
+        }
+    }
 
     // Instruction following
     let instruction_following_capability = match instruction_following_result {
@@ -248,6 +283,13 @@ pub async fn run_probe_battery(
             0.0
         }
     };
+
+    // Graph extraction - check degradation first
+    if let Ok(ref ge_result) = graph_extraction_result {
+        if ge_result.degraded {
+            degraded_probes.push("graph_extraction".to_string());
+        }
+    }
 
     // Graph extraction
     let graph_extraction_capability = match graph_extraction_result {
@@ -296,6 +338,7 @@ pub async fn run_probe_battery(
         memory_injection_fidelity,
         graph_extraction: graph_extraction_capability,
         lora_training_recommended,
+        degraded_probes: degraded_probes.clone(),
     };
 
     let total_duration_ms = battery_start.elapsed().as_millis() as u64;
@@ -314,6 +357,7 @@ pub async fn run_probe_battery(
         memory_injection_fidelity = model_profile.memory_injection_fidelity,
         graph_extraction = %model_profile.graph_extraction,
         lora_training_recommended = model_profile.lora_training_recommended,
+        degraded_probes = ?degraded_probes,
         total_duration_ms = total_duration_ms,
         "probe battery completed — profile assembled"
     );
@@ -361,6 +405,10 @@ pub struct ProbeResult {
     pub capability_level: Option<CapabilityLevel>,
     /// Wall-clock duration of the probe.
     pub duration: std::time::Duration,
+    /// Whether this probe result is degraded (formula/stub fallback due to
+    /// inference unavailability). When true, downstream systems should treat
+    /// the result as a conservative estimate rather than measured capability.
+    pub degraded: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -439,6 +487,7 @@ mod tests {
             memory_injection_fidelity: 0.85,
             graph_extraction: CapabilityLevel::Full,
             lora_training_recommended: false,
+            degraded_probes: vec![],
         };
 
         let json = serde_json::to_string(&profile);

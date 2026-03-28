@@ -62,6 +62,7 @@ pub async fn run(
         raw_score,
         capability_level: Some(capability_level),
         duration,
+        degraded: true, // TODO: Implement real inference probe
     })
 }
 
