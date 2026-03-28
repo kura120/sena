@@ -9,33 +9,59 @@ use std::time::Instant;
 
 use crate::config::InstructionFollowingProbeConfig;
 use crate::error::SenaResult;
+use crate::generated::sena_daemonbus_v1::inference_service_client::InferenceServiceClient;
+use crate::generated::sena_daemonbus_v1::CompleteRequest;
 use crate::probes::{CapabilityLevel, ProbeResult};
+use tonic::transport::Channel;
 
 /// Run the instruction following probe against the active model.
 ///
-/// The probe sends a multi-step instruction prompt with a precise expected
-/// output format. Each line of the response is compared against the expected
-/// output to compute a compliance score.
+/// Sends a multi-step instruction prompt via gRPC to InferenceService and
+/// compares the response line-by-line against the expected output.
 ///
-/// # Scoring
-/// - Each matching line contributes equally to the score.
-/// - Lines are compared after trimming whitespace.
-/// - The raw score is the fraction of expected lines that match.
-/// - Score is mapped to `CapabilityLevel` via config thresholds.
+/// # Graceful Degradation
+/// When `inference_client` is None or the inference call fails:
+/// 1. Logs a warning
+/// 2. Returns score 0.0 with `degraded: true`
+/// 3. Does NOT return an error (error would abort the battery)
 pub async fn run(
     config: &InstructionFollowingProbeConfig,
     model_id: &str,
+    inference_client: Option<InferenceServiceClient<Channel>>,
 ) -> SenaResult<ProbeResult> {
     let start = Instant::now();
 
-    // TODO(implementation): Send config.probe_prompt to the model via llama-cpp-rs
-    // with temperature=0, max_tokens from global probe config, then compare
-    // the response against config.expected_output line by line.
-    //
-    // Stub: return a placeholder result indicating the probe did not run.
+    let degraded = inference_client.is_none();
+
+    if degraded {
+        tracing::warn!(
+            subsystem = "model_probe",
+            probe_name = "instruction_following",
+            reason = "inference_unavailable",
+            "probe degraded — InferenceService client not available"
+        );
+    }
+
+    let model_response = if let Some(mut client) = inference_client {
+        match run_with_inference(&mut client, &config.probe_prompt).await {
+            Ok(response) => response,
+            Err(inference_error) => {
+                tracing::warn!(
+                    subsystem = "model_probe",
+                    probe_name = "instruction_following",
+                    event_type = "inference_failed",
+                    error = %inference_error,
+                    "inference call failed — returning degraded result"
+                );
+                String::new()
+            }
+        }
+    } else {
+        String::new()
+    };
 
     let raw_score = score_instruction_compliance(
-        "", // model response — empty until inference is wired
+        &model_response,
         &config.expected_output,
     );
 
@@ -54,6 +80,7 @@ pub async fn run(
         result = %capability_level,
         score = raw_score,
         duration_ms = duration.as_millis() as u64,
+        degraded = degraded || model_response.is_empty(),
         "probe completed"
     );
 
@@ -62,8 +89,36 @@ pub async fn run(
         raw_score,
         capability_level: Some(capability_level),
         duration,
-        degraded: true, // TODO: Implement real inference probe
+        degraded: degraded || model_response.is_empty(),
     })
+}
+
+/// Send the instruction prompt to the model via InferenceService gRPC.
+async fn run_with_inference(
+    client: &mut InferenceServiceClient<Channel>,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let request = CompleteRequest {
+        prompt: prompt.to_string(),
+        model_id: String::new(),
+        max_tokens: 256,
+        temperature: 0.0,
+        priority: 3, // Standard priority for probes
+        request_id: format!("probe-instruction-{}", uuid_v4_simple()),
+    };
+
+    let response = client.complete(request).await?;
+    let inner = response.into_inner();
+    Ok(inner.text)
+}
+
+/// Generate a simple pseudo-random request ID (no external crate dependency).
+fn uuid_v4_simple() -> u64 {
+    use std::time::SystemTime;
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 /// Score instruction compliance by comparing response lines against expected lines.

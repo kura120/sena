@@ -534,15 +534,13 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
 
     /// Trigger memory consolidation during deep idle.
     ///
-    /// This method is invoked when a TOPIC_MEMORY_CONSOLIDATION_REQUESTED
-    /// event arrives from CTP. For Phase 1, consolidation is a no-op stub
-    /// that logs the trigger. In Phase 2, this will:
-    ///
+    /// Invoked when TOPIC_MEMORY_CONSOLIDATION_REQUESTED arrives from CTP.
+    /// Phase 2 will implement the full pipeline:
     /// - Promote high-importance short-term entries to long-term
     /// - Compact or merge episodic entries with low importance scores
     /// - Trigger decay updates for entries approaching the decay floor
     ///
-    /// The priority is always Background — consolidation never preempts
+    /// Priority is always Background — consolidation never preempts
     /// user-facing operations.
     pub async fn consolidate(&self) -> SenaResult<()> {
         let start = Instant::now();
@@ -553,11 +551,10 @@ impl<E: Embedder + 'static, X: Extractor + 'static> MemoryEngine<E, X> {
             tier = "all",
             operation = operation,
             priority = %Priority::Background,
-            "consolidation triggered — Phase 1 stub (no-op)"
+            "consolidation triggered — no-op until Phase 2 pipeline is wired"
         );
 
-        // Phase 2: Implement actual consolidation logic here.
-        // For now, just log and return success.
+        // Phase 2: consolidation logic goes here.
 
         let duration_ms = start.elapsed().as_millis() as u64;
 

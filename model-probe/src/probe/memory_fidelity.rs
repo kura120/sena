@@ -12,6 +12,9 @@ use std::time::Instant;
 
 use crate::config::MemoryFidelityProbeConfig;
 use crate::error::{ErrorCode, SenaError, SenaResult};
+use crate::generated::sena_daemonbus_v1::inference_service_client::InferenceServiceClient;
+use crate::generated::sena_daemonbus_v1::CompleteRequest;
+use tonic::transport::Channel;
 
 /// Result of the memory injection fidelity probe.
 #[derive(Debug, Clone)]
@@ -20,26 +23,40 @@ pub struct MemoryFidelityResult {
     pub fidelity_score: f32,
     /// Wall-clock duration of the probe in milliseconds.
     pub duration_ms: u64,
+    /// Whether this probe ran in degraded mode (no inference available).
+    pub degraded: bool,
 }
 
 /// Run the memory injection fidelity probe against the active model.
 ///
-/// The probe constructs a prompt that includes `config.injected_fact` as
-/// context, then asks `config.probe_prompt`. The response is scored against
-/// `config.expected_answer` by checking keyword overlap.
+/// Constructs a prompt with `config.injected_fact` as context, asks
+/// `config.probe_prompt`, and scores the response via keyword overlap
+/// against `config.expected_answer`.
 ///
-/// # Stub implementation
-///
-/// Actual inference via llama-cpp-rs is not yet wired. This stub returns a
-/// score of 0.0 and logs that it is unimplemented. Once the model backend is
-/// integrated, this function will:
-///
-/// 1. Build a prompt: `"{injected_fact}\n\n{probe_prompt}"`
-/// 2. Run inference at temperature=0 with capped max_tokens
-/// 3. Score the response against `expected_answer` using keyword overlap
-/// 4. Return the fidelity score
-pub async fn run(config: &MemoryFidelityProbeConfig) -> SenaResult<MemoryFidelityResult> {
+/// # Graceful Degradation
+/// When `inference_client` is None or inference fails:
+/// 1. Logs a warning
+/// 2. Returns score 0.0 with `degraded: true`
+/// 3. Does NOT return an error
+pub async fn run(
+    config: &MemoryFidelityProbeConfig,
+    inference_client: Option<InferenceServiceClient<Channel>>,
+) -> SenaResult<MemoryFidelityResult> {
     let start = Instant::now();
+
+    // Validate config fields
+    if config.injected_fact.is_empty() {
+        return Err(SenaError::new(
+            ErrorCode::ProbeFailed,
+            "memory_fidelity probe config has empty injected_fact",
+        ));
+    }
+    if config.expected_answer.is_empty() {
+        return Err(SenaError::new(
+            ErrorCode::ProbeFailed,
+            "memory_fidelity probe config has empty expected_answer",
+        ));
+    }
 
     tracing::info!(
         subsystem = "model_probe",
@@ -48,14 +65,48 @@ pub async fn run(config: &MemoryFidelityProbeConfig) -> SenaResult<MemoryFidelit
         "memory fidelity probe starting"
     );
 
-    // TODO(implementation): Replace with actual llama-cpp-rs inference.
-    //
-    // Pseudocode for the real implementation:
-    //
-    //   let prompt = format!("{}\n\n{}", config.injected_fact, config.probe_prompt);
-    //   let response = model.complete(&prompt, temperature=0.0, max_tokens=config_max).await?;
-    //   let fidelity_score = score_keyword_overlap(&response, &config.expected_answer);
-    let fidelity_score = run_stub(config)?;
+    let degraded = inference_client.is_none();
+
+    if degraded {
+        tracing::warn!(
+            subsystem = "model_probe",
+            probe_name = "memory_fidelity",
+            reason = "inference_unavailable",
+            "probe degraded — InferenceService client not available"
+        );
+    }
+
+    let fidelity_score = if let Some(mut client) = inference_client {
+        let prompt = format!("{}\n\n{}", config.injected_fact, config.probe_prompt);
+
+        let request = CompleteRequest {
+            prompt,
+            model_id: String::new(),
+            max_tokens: 256,
+            temperature: 0.0,
+            priority: 3,
+            request_id: format!("probe-memory-fidelity-{}", timestamp_nanos()),
+        };
+
+        match client.complete(request).await {
+            Ok(response) => {
+                let text = response.into_inner().text;
+                score_keyword_overlap(&text, &config.expected_answer)
+            }
+            Err(inference_error) => {
+                tracing::warn!(
+                    subsystem = "model_probe",
+                    probe_name = "memory_fidelity",
+                    event_type = "inference_failed",
+                    error = %inference_error,
+                    "inference call failed — returning degraded result"
+                );
+                0.0
+            }
+        }
+    } else {
+        0.0
+    };
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -65,42 +116,23 @@ pub async fn run(config: &MemoryFidelityProbeConfig) -> SenaResult<MemoryFidelit
         event_type = "probe_completed",
         score = fidelity_score,
         duration_ms = duration_ms,
+        degraded = degraded || fidelity_score == 0.0,
         "memory fidelity probe completed"
     );
 
     Ok(MemoryFidelityResult {
         fidelity_score,
         duration_ms,
+        degraded: degraded || fidelity_score == 0.0,
     })
 }
 
-/// Stub that returns 0.0 until real inference is wired.
-///
-/// Validates that the config has the required fields populated so
-/// wiring failures surface early rather than at first real probe run.
-fn run_stub(config: &MemoryFidelityProbeConfig) -> SenaResult<f32> {
-    if config.injected_fact.is_empty() {
-        return Err(SenaError::new(
-            ErrorCode::ProbeFailed,
-            "memory_fidelity probe config has empty injected_fact",
-        ));
-    }
-
-    if config.expected_answer.is_empty() {
-        return Err(SenaError::new(
-            ErrorCode::ProbeFailed,
-            "memory_fidelity probe config has empty expected_answer",
-        ));
-    }
-
-    tracing::warn!(
-        subsystem = "model_probe",
-        probe_name = "memory_fidelity",
-        event_type = "probe_stubbed",
-        "memory fidelity probe is stubbed — returning 0.0 until llama-cpp-rs is integrated"
-    );
-
-    Ok(0.0)
+fn timestamp_nanos() -> u64 {
+    use std::time::SystemTime;
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 /// Score a model response against the expected answer by keyword overlap.

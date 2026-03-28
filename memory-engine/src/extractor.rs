@@ -183,21 +183,12 @@ impl Extractor for LlamaExtractor {
                     )
                 })?;
 
-            // TODO(phase2): Wire up the full generation loop.
-            //
-            // The real implementation will:
-            // 1. Feed the tokenized prompt into the context
-            // 2. Sample up to `max_tokens` tokens at the configured `temperature`
-            // 3. Decode the generated tokens back to a string
-            // 4. Parse the string as structured output into `ExtractionResult`
-            //
-            // This is deferred to Phase 2 per PRD §6.5 — the extraction
-            // pipeline requires structured output prompting which is a
-            // Phase 2 capability. The DegradedExtractor is the V1 fallback.
-            //
-            // For now, return an error indicating the extraction pipeline is
-            // not yet wired. This ensures no caller silently receives empty
-            // results without knowing extraction is unimplemented.
+            // LlamaExtractor inference loop deferred to Phase 2 (PRD §6.5).
+            // The full pipeline will: feed tokenized prompt into context,
+            // sample up to max_tokens at configured temperature, decode to
+            // string, and parse structured output into ExtractionResult.
+            // DegradedExtractor is the V1 fallback — returns empty results
+            // so callers always get a valid ExtractionResult shape.
             let _ = (context, tokens, max_tokens, temperature);
 
             Err::<ExtractionResult, EchoError>(

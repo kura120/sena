@@ -8,6 +8,7 @@ mod generated;
 mod gguf;
 mod grpc;
 mod hotkey;
+mod job_object;
 mod overlay;
 mod state;
 mod toast;
@@ -86,6 +87,13 @@ fn main() {
             commands::show_model_panel,
         ])
         .setup(|app| {
+            // Initialize Windows Job Object for process tree management.
+            // All Sena subprocesses will be assigned to this job so they are
+            // automatically terminated when the UI process exits.
+            if let Err(e) = job_object::init_job_object() {
+                tracing::warn!(error = %e, "Job Object init failed — daemon-bus may outlive UI");
+            }
+
             // Create all overlay panel windows
             overlay::create_panel_windows(app)
                 .map_err(|e| format!("Failed to create panel windows: {}", e))?;
@@ -180,24 +188,12 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build Tauri application")
-        .run(|app_handle, event| {
+        .run(|_app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = &event {
-                // Kill daemon-bus if the UI spawned it
-                let config = app_handle.state::<AppState>();
-                let address = config.config.daemon_bus.address.clone();
-                let port = address
-                    .rsplit(':')
-                    .next()
-                    .and_then(|p| p.parse::<u16>().ok())
-                    .unwrap_or(50051);
-
-                // Use a blocking runtime to run the async kill
-                // We're in the exit handler so blocking is acceptable
-                let rt = tokio::runtime::Runtime::new();
-                if let Ok(rt) = rt {
-                    let _ = rt.block_on(daemon_launcher::kill_process_on_port(port));
-                    tracing::info!("daemon-bus killed on UI exit");
-                }
+                // The Windows Job Object (KILL_ON_JOB_CLOSE) handles process
+                // cleanup automatically when this process exits. The Job Object
+                // handle is dropped as part of normal process teardown.
+                tracing::info!("UI exit requested — Job Object will clean up daemon-bus");
             }
         });
 }

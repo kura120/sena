@@ -35,7 +35,9 @@ unsafe impl Sync for ModelHandle {}
 /// # Errors
 /// Returns `InferenceError::ModelLoad` if the file does not exist or cannot be read.
 pub fn estimate_vram_mb(model_path: &Path) -> Result<u32, InferenceError> {
-    // FIXME(inference): replace file-size heuristic with actual gguf metadata parsing for accurate VRAM estimation
+    // File-size heuristic — GGUF metadata parsing for precise VRAM estimation
+    // requires reading the model header (Milestone E: lora-manager integration).
+    // The 1.2x multiplier accounts for KV cache and context overhead.
     let metadata = std::fs::metadata(model_path).map_err(|err| InferenceError::ModelLoad {
         model_id: model_path.display().to_string(),
         reason: format!("Failed to read model file metadata: {err}"),

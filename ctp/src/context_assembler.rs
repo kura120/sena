@@ -12,8 +12,8 @@ use crate::generated::sena_daemonbus_v1::{
 };
 use tokio::sync::Mutex;
 
-/// Stub for SoulBox personality snapshot — SoulBox not built yet.
-/// Replaced with the real type in Milestone C.
+/// SoulBox personality snapshot — placeholder until Milestone C (SoulBox subsystem).
+/// Real type will carry identity traits, communication style, and evolving personality.
 #[derive(Debug, Clone, Default)]
 pub struct SoulBoxSnapshot {
     pub personality_summary: String,
@@ -28,7 +28,7 @@ impl SoulBoxSnapshot {
     }
 }
 
-/// Stub for OS context — platform layer not built yet.
+/// OS context — placeholder until Milestone D (platform layer integration).
 #[derive(Debug, Clone, Default)]
 pub struct OsContext {
     pub active_window: String,
@@ -45,7 +45,7 @@ impl OsContext {
     }
 }
 
-/// Stub for model capability profile — received from daemon-bus at boot.
+/// Model capability profile — populated from MODEL_PROFILE_READY event at boot.
 #[derive(Debug, Clone, Default)]
 pub struct ModelCapabilityProfile {
     pub model_id: String,
@@ -219,9 +219,8 @@ impl ContextAssembler {
         })
     }
 
-    /// Read SoulBox snapshot — stub for Phase 1, returns empty.
+    /// Read SoulBox snapshot — returns empty until Milestone C.
     async fn read_soulbox(&self) -> Result<SoulBoxSnapshot, CtpError> {
-        // SoulBox is not built yet — return empty
         Ok(SoulBoxSnapshot::empty())
     }
 }

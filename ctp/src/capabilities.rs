@@ -19,15 +19,13 @@ pub const TELEMETRY_SYNTHETIC: &str = "telemetry:synthetic";
 ///
 /// This is called when signaling CTP_READY to daemon-bus.
 pub fn get_capabilities() -> Vec<String> {
-    let capabilities = vec![
+    // CTP currently uses synthetic telemetry (no real OS telemetry until
+    // platform layer integration in Milestone D). Report this so downstream
+    // consumers know the thought pipeline is not driven by real user activity.
+    vec![
         THOUGHT_GENERATION.to_string(),
         THOUGHT_EVALUATION.to_string(),
         RELEVANCE_SCORING.to_string(),
-    ];
-
-    // TODO: Once telemetry integration is implemented, check if using
-    // synthetic telemetry and add TELEMETRY_SYNTHETIC if so.
-    // For now, CTP does not have telemetry integration yet.
-
-    capabilities
+        TELEMETRY_SYNTHETIC.to_string(),
+    ]
 }

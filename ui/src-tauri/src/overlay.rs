@@ -66,15 +66,9 @@ fn apply_window_effects(window: &WebviewWindow) {
     // As of Tauri v2 RC, window effects are applied via set_effects() method.
     // However, this API is still evolving. For now, we document the intent.
 
-    // TODO: Add window effects when Tauri v2 stabilizes the API
-    // Expected usage (when ready):
-    // use tauri::window::{Effect, EffectsBuilder};
-    // let effects = EffectsBuilder::new()
-    //     .effect(Effect::Acrylic)
-    //     .build();
-    // if let Err(e) = window.set_effects(effects) {
-    //     warn!(window_label = ?window.label(), error = %e, "Failed to apply window effects");
-    // }
+    // Window effects (acrylic blur) deferred — Tauri v2 set_effects() API
+    // is not yet stable. Tracked for Milestone C (UI polish pass).
+    // When ready: use tauri::window::{Effect, EffectsBuilder} with Effect::Acrylic.
 
     warn!(
         window_label = ?window.label(),
@@ -766,6 +760,19 @@ pub fn show_single_panel(app_handle: &AppHandle, label: &str) -> Result<(), Stri
             error!(label, error = %e, "failed to show panel");
             msg
         })?;
+
+        // Emit show animation event so the React useOverlayAnimation hook
+        // transitions from panel-hiding to panel-visible. Without this,
+        // reopening a previously-closed panel leaves CSS at opacity:0.
+        let _ = app_handle.emit_to(
+            label,
+            "panel-animate",
+            OverlayAnimationPayload {
+                action: "show".to_string(),
+                delay_ms: 0,
+            },
+        );
+
         window.set_focus().map_err(|e| {
             let msg = format!("Failed to focus panel {}: {}", label, e);
             error!(label, error = %e, "failed to focus panel");

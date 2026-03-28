@@ -77,7 +77,14 @@ fn resolve_config_path(config: &DaemonBusLaunchConfig) -> PathBuf {
     workspace_root.join(&config.config_path)
 }
 
-/// Spawn daemon-bus as a fully detached process.
+/// Spawn daemon-bus as a child process assigned to the Sena Job Object.
+///
+/// Uses CREATE_NEW_PROCESS_GROUP so daemon-bus gets its own console group
+/// but remains a child of this process. The Job Object (initialized in
+/// main.rs setup) ensures all processes are killed when the UI exits.
+///
+/// The working directory is set to the workspace root so that
+/// supervisor-relative paths in daemon-bus.toml resolve correctly.
 #[cfg(target_os = "windows")]
 fn spawn_daemon_bus_detached(
     binary_path: &std::path::Path,
@@ -85,25 +92,47 @@ fn spawn_daemon_bus_detached(
 ) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
-    // DETACHED_PROCESS (0x00000008) | CREATE_NEW_PROCESS_GROUP (0x00000200)
-    const DETACHED_FLAGS: u32 = 0x00000008 | 0x00000200;
+    // CREATE_NEW_PROCESS_GROUP (0x00000200) only — no DETACHED_PROCESS so the
+    // child stays in the Job Object and appears under Sena in Task Manager.
+    const CREATE_FLAGS: u32 = 0x00000200;
+
+    let workspace_root = {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap_or(&manifest_dir)
+            .to_path_buf()
+    };
 
     info!(
         binary = %binary_path.display(),
         config = %config_path.display(),
-        "Spawning daemon-bus (Windows detached)"
+        cwd = %workspace_root.display(),
+        "Spawning daemon-bus (Windows, Job Object managed)"
     );
 
-    let _child = Command::new(binary_path)
+    let child = Command::new(binary_path)
         .env("DAEMON_BUS_CONFIG", config_path)
+        .current_dir(&workspace_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .creation_flags(DETACHED_FLAGS)
+        .creation_flags(CREATE_FLAGS)
         .spawn()
         .map_err(|e| format!("Failed to spawn daemon-bus: {}", e))?;
 
-    // Drop the child handle — process is fully detached
+    // Assign to the Sena Job Object for automatic cleanup on UI exit
+    let pid = child.id();
+    if let Err(e) = crate::job_object::assign_pid_to_job(pid) {
+        warn!(
+            pid,
+            error = %e,
+            "Failed to assign daemon-bus to Job Object — process may outlive UI"
+        );
+    }
+
+    // Drop the child handle — Job Object owns the process lifecycle now
     Ok(())
 }
 
@@ -112,21 +141,31 @@ fn spawn_daemon_bus_detached(
     binary_path: &std::path::Path,
     config_path: &std::path::Path,
 ) -> Result<(), String> {
+    let workspace_root = {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap_or(&manifest_dir)
+            .to_path_buf()
+    };
+
     info!(
         binary = %binary_path.display(),
         config = %config_path.display(),
-        "Spawning daemon-bus (Unix detached)"
+        cwd = %workspace_root.display(),
+        "Spawning daemon-bus (Unix)"
     );
 
     let _child = Command::new(binary_path)
         .env("DAEMON_BUS_CONFIG", config_path)
+        .current_dir(&workspace_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("Failed to spawn daemon-bus: {}", e))?;
 
-    // Drop the child handle — process is fully detached
     Ok(())
 }
 

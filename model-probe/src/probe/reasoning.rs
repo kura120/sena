@@ -16,7 +16,10 @@ use tracing;
 
 use crate::config::ReasoningProbeConfig;
 use crate::error::{ErrorCode, SenaError, SenaResult};
+use crate::generated::sena_daemonbus_v1::inference_service_client::InferenceServiceClient;
+use crate::generated::sena_daemonbus_v1::CompleteRequest;
 use crate::probes::CapabilityLevel;
+use tonic::transport::Channel;
 
 /// Result of the reasoning quality baseline probe.
 #[derive(Debug, Clone)]
@@ -59,12 +62,13 @@ pub async fn run_reasoning_probe(
     config: &ReasoningProbeConfig,
     _model_id: &str,
     per_probe_timeout_ms: u64,
+    inference_client: Option<InferenceServiceClient<Channel>>,
 ) -> SenaResult<ReasoningProbeResult> {
     let config_clone = config.clone();
     let timeout_duration = std::time::Duration::from_millis(per_probe_timeout_ms);
 
     let result = tokio::time::timeout(timeout_duration, async {
-        run_reasoning_probe_inner(&config_clone).await
+        run_reasoning_probe_inner(&config_clone, inference_client).await
     })
     .await;
 
@@ -86,25 +90,50 @@ pub async fn run_reasoning_probe(
     }
 }
 
-/// Inner implementation — separated so the timeout wrapper stays clean.
+/// Inner implementation — sends the reasoning prompt to inference and scores the response.
 async fn run_reasoning_probe_inner(
     config: &ReasoningProbeConfig,
+    inference_client: Option<InferenceServiceClient<Channel>>,
 ) -> SenaResult<ReasoningProbeResult> {
     let start = Instant::now();
 
-    // TODO(implementation): Replace this stub with actual llama-cpp-rs inference.
-    //
-    // The real implementation will:
-    // 1. Send config.probe_prompt to the model at temperature=0, max_tokens from global config
-    // 2. Parse the response to extract the final answer (last line)
-    // 3. Compare the final answer against config.expected_answer
-    // 4. Scan the full response for config.expected_reasoning_steps keywords
-    // 5. Combine into a weighted score
-    //
-    // For now, return a stub result that scores as CapabilityLevel::None so downstream
-    // systems behave conservatively until real inference is wired up.
+    let degraded = inference_client.is_none();
 
-    let model_response = String::new();
+    if degraded {
+        tracing::warn!(
+            subsystem = "model_probe",
+            probe_name = "reasoning",
+            reason = "inference_unavailable",
+            "probe degraded — InferenceService client not available"
+        );
+    }
+
+    let model_response = if let Some(mut client) = inference_client {
+        let request = CompleteRequest {
+            prompt: config.probe_prompt.clone(),
+            model_id: String::new(),
+            max_tokens: 256,
+            temperature: 0.0,
+            priority: 3,
+            request_id: format!("probe-reasoning-{}", timestamp_nanos()),
+        };
+
+        match client.complete(request).await {
+            Ok(response) => response.into_inner().text,
+            Err(inference_error) => {
+                tracing::warn!(
+                    subsystem = "model_probe",
+                    probe_name = "reasoning",
+                    event_type = "inference_failed",
+                    error = %inference_error,
+                    "inference call failed — returning degraded result"
+                );
+                String::new()
+            }
+        }
+    } else {
+        String::new()
+    };
 
     let answer_correct = check_final_answer(&model_response, &config.expected_answer);
     let matched_reasoning_steps =
@@ -138,10 +167,19 @@ async fn run_reasoning_probe_inner(
         matched_steps = result.matched_reasoning_steps,
         total_steps = result.total_reasoning_steps,
         duration_ms = result.duration_ms,
+        degraded = degraded || model_response.is_empty(),
         "reasoning quality probe completed"
     );
 
     Ok(result)
+}
+
+fn timestamp_nanos() -> u64 {
+    use std::time::SystemTime;
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 /// Check whether the model's final answer matches the expected answer.

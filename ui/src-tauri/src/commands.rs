@@ -1132,27 +1132,45 @@ pub async fn extract_ollama_model(
     validate_blob_digest(&blob_digest)?;
     let safe_model_name = sanitize_model_name(&model_name)?;
     
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Cannot determine user home directory".to_string())?;
+    // Resolve blob path from the same base directory used by list_ollama_models.
+    // Checks OLLAMA_MODELS env var, then persistent store override, then default.
+    let models_base = {
+        use tauri_plugin_store::StoreExt;
+        if let Ok(store) = app_handle.store("ollama-settings.json") {
+            if let Some(val) = store.get("ollama_manifests_dir") {
+                if let Some(dir) = val.as_str() {
+                    let manifests_path = std::path::PathBuf::from(dir);
+                    // The store holds the manifests dir — parent is the models dir
+                    if let Some(parent) = manifests_path.parent() {
+                        if parent.exists() {
+                            parent.to_path_buf()
+                        } else {
+                            resolve_ollama_models_dir()
+                        }
+                    } else {
+                        resolve_ollama_models_dir()
+                    }
+                } else {
+                    resolve_ollama_models_dir()
+                }
+            } else {
+                resolve_ollama_models_dir()
+            }
+        } else {
+            resolve_ollama_models_dir()
+        }
+    };
     
-    // Blob path: ~/.ollama/models/blobs/<digest>
+    // Blob path: <models_base>/blobs/<digest>
     let digest_filename = blob_digest.replace(':', "-");
-    let blob_path = std::path::PathBuf::from(&home)
-        .join(".ollama")
-        .join("models")
-        .join("blobs")
-        .join(&digest_filename);
+    let blob_path = models_base.join("blobs").join(&digest_filename);
     
     if !blob_path.exists() {
         return Err(format!("Blob not found: {}", blob_path.display()));
     }
     
-    // Verify blob path is within the expected Ollama directory
-    let expected_blobs_dir = std::path::PathBuf::from(&home)
-        .join(".ollama")
-        .join("models")
-        .join("blobs");
+    // Verify blob path is within the expected Ollama blobs directory
+    let expected_blobs_dir = models_base.join("blobs");
     let canonical_blob = blob_path.canonicalize()
         .map_err(|e| format!("Failed to resolve blob path: {}", e))?;
     let canonical_blobs_dir = expected_blobs_dir.canonicalize()
@@ -1450,21 +1468,44 @@ pub fn open_models_folder() -> Result<(), String> {
     Ok(())
 }
 
-/// Detect the default Ollama manifests directory.
-fn detect_ollama_directory() -> std::path::PathBuf {
+/// Resolve the Ollama models root directory (contains `blobs/` and `manifests/`).
+///
+/// Precedence:
+/// 1. `OLLAMA_MODELS` environment variable (Ollama's official override)
+/// 2. Default: `~/.ollama/models` (standard installation)
+fn resolve_ollama_models_dir() -> std::path::PathBuf {
+    if let Ok(env_dir) = std::env::var("OLLAMA_MODELS") {
+        let path = std::path::PathBuf::from(&env_dir);
+        if path.exists() {
+            return path;
+        }
+        tracing::warn!(
+            env_dir = %env_dir,
+            "OLLAMA_MODELS env var set but path does not exist — falling back to default"
+        );
+    }
+
     #[cfg(target_os = "windows")]
     {
         let user_profile = std::env::var("USERPROFILE")
             .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
         std::path::PathBuf::from(user_profile)
-            .join(".ollama").join("models").join("manifests")
+            .join(".ollama")
+            .join("models")
     }
     #[cfg(not(target_os = "windows"))]
     {
         dirs::home_dir()
             .unwrap_or_default()
-            .join(".ollama").join("models").join("manifests")
+            .join(".ollama")
+            .join("models")
     }
+}
+
+/// Detect the default Ollama manifests directory.
+/// Uses `resolve_ollama_models_dir()` to find the base, then appends `manifests/`.
+fn detect_ollama_directory() -> std::path::PathBuf {
+    resolve_ollama_models_dir().join("manifests")
 }
 
 /// Get the currently configured Ollama manifests directory.

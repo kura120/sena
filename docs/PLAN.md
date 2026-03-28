@@ -7,8 +7,8 @@ One active milestone at a time. One active task at a time. Completed milestones 
 ## Current Status
 
 **Active Milestone:** Milestone B — Sena Can Be Spoken To
-**Active Task:** Critical audit fixes (see §Critical Fixes)
-**Last Completed:** Milestone A/B core implementation + Debug UI
+**Active Task:** Stabilization (boot, process lifecycle, probe stubs, TODO cleanup)
+**Last Completed:** Critical audit fixes + stabilization pass
 
 ## Critical Fixes
 
@@ -52,7 +52,7 @@ These are blocking issues identified by the audit reports in `docs/audit/`. They
 
 ## Milestone A — Sena Is Alive
 
-**Status:** ✅ Core complete, critical fixes in progress
+**Status:** ✅ Complete
 
 **Subsystems required:**
 - [x] daemon-bus
@@ -71,7 +71,7 @@ These are blocking issues identified by the audit reports in `docs/audit/`. They
 
 ## Milestone B — Sena Can Be Spoken To
 
-**Status:** ✅ Core complete, critical fixes in progress
+**Status:** ✅ Complete
 
 **Subsystems required (in addition to A):**
 - [x] prompt-composer
@@ -148,28 +148,28 @@ Before soulbox or tacet code is written, ALL 8 admission requirements from ARCHI
 - Ambient overlay UI
 - Dedicated app window
 - Extended OS integrations (browser, peripherals, camera/mic)
- Agent capability tier system
- CTP autonomy controls in SoulBox
- Full test suite across all subsystems
- lora-manager — idle-time adapter training pipeline
- codebase-context — build-time index generation + runtime status integration
- Reasoning gap detection in model-probe
- Adapter quality gating pipeline
- LoRA adapter versioning and per-model storage
- Multi-model inference registry — Mid/High tier parallel model loading
- Injectable architecture design — pending Doc-to-LoRA community adoption
- New hardware milestone (16GB VRAM / 32GB RAM) — unlocks injectable architecture V2
- macOS support
- Linux support
- Community agent marketplace — with permission model defined below
- SoulBox import/export
- Extractable subsystem packaging as standalone OSS
- Advanced model routing and optimization
- LoRA and community model artifact signing — cryptographic signatures required for any externally-sourced model or LoRA weights; unsigned artifacts rejected at load time
- Community agent supply chain hardening — dependency scanning (SBOM generation), signed release binaries, reproducible build pipeline
- Privacy policy and consent UX — explicit consent flows for per-agent permissions, telemetry opt-in dialogs, onboarding privacy disclosure
- Injectable architecture V2 — 1-3B core model fine-tuned for Sena identity, Doc-to-LoRA capability injectables, hardware tier High required
- ech0 V2 — procedural + resource memory components consumed by memory-engine
- Streaming inference + interrupt — Moshi integration, CTP on partial input, interrupt signal on confidence threshold, V2-V3 STT/TTS foundation
- AMI world model integration — replace perception layer if accessible open weights available for target model family
- ech0 V3 / full MIRIX — if project has momentum
+- Agent capability tier system
+- CTP autonomy controls in SoulBox
+- Full test suite across all subsystems
+- lora-manager — idle-time adapter training pipeline
+- codebase-context — build-time index generation + runtime status integration
+- Reasoning gap detection in model-probe
+- Adapter quality gating pipeline
+- LoRA adapter versioning and per-model storage
+- Multi-model inference registry — Mid/High tier parallel model loading
+- Injectable architecture design — pending Doc-to-LoRA community adoption
+- New hardware milestone (16GB VRAM / 32GB RAM) — unlocks injectable architecture V2
+- macOS support
+- Linux support
+- Community agent marketplace — with permission model defined below
+- SoulBox import/export
+- Extractable subsystem packaging as standalone OSS
+- Advanced model routing and optimization
+- LoRA and community model artifact signing — cryptographic signatures required for any externally-sourced model or LoRA weights; unsigned artifacts rejected at load time
+- Community agent supply chain hardening — dependency scanning (SBOM generation), signed release binaries, reproducible build pipeline
+- Privacy policy and consent UX — explicit consent flows for per-agent permissions, telemetry opt-in dialogs, onboarding privacy disclosure
+- Injectable architecture V2 — 1-3B core model fine-tuned for Sena identity, Doc-to-LoRA capability injectables, hardware tier High required
+- ech0 V2 — procedural + resource memory components consumed by memory-engine
+- Streaming inference + interrupt — Moshi integration, CTP on partial input, interrupt signal on confidence threshold, V2-V3 STT/TTS foundation
+- AMI world model integration — replace perception layer if accessible open weights available for target model family
+- ech0 V3 / full MIRIX — if project has momentum

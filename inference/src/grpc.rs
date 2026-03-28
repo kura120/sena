@@ -117,10 +117,10 @@ impl InferenceService for InferenceGrpcService {
         tracing::debug!(
             event_type = "rpc_unimplemented",
             rpc = "ReadActivations",
-            "ReadActivations is reserved for Phase 2"
+            "ReadActivations deferred to Milestone D (activation steering)"
         );
         Err(Status::unimplemented(
-            "ReadActivations is reserved for Phase 2",
+            "ReadActivations deferred to Milestone D",
         ))
     }
 
@@ -131,9 +131,9 @@ impl InferenceService for InferenceGrpcService {
         tracing::debug!(
             event_type = "rpc_unimplemented",
             rpc = "Steer",
-            "Steer is reserved for Phase 3"
+            "Steer deferred to Milestone D (activation steering)"
         );
-        Err(Status::unimplemented("Steer is reserved for Phase 3"))
+        Err(Status::unimplemented("Steer deferred to Milestone D"))
     }
 
     async fn list_models(

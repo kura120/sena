@@ -30,16 +30,8 @@ pub struct LoraCompatResult {
 /// compares against the configured list of LoRA-compatible families.
 /// No inference call is made.
 ///
-/// # Stub implementation
-///
-/// Actual metadata extraction from the GGUF file via llama-cpp-rs is not yet
-/// wired. This stub returns `lora_compatible = false` and logs that it is
-/// unimplemented. Once the model backend is integrated, this function will:
-///
-/// 1. Load model metadata from the GGUF file header
-/// 2. Extract the architecture field using `config.probes.lora_compat.architecture_metadata_key`
-/// 3. Normalize to lowercase and compare against `config.model.lora_compatible_architectures`
-/// 4. Return the match result
+/// Currently uses filename-based heuristic detection. Full GGUF header
+/// parsing will be implemented in Milestone E when lora-manager is built.
 pub async fn run(config: &ModelProbeConfig) -> SenaResult<LoraCompatResult> {
     let start = Instant::now();
 
@@ -51,18 +43,6 @@ pub async fn run(config: &ModelProbeConfig) -> SenaResult<LoraCompatResult> {
         metadata_key = %config.probes.lora_compat.architecture_metadata_key,
         "LoRA compatibility probe starting"
     );
-
-    // TODO(implementation): Replace with actual GGUF metadata extraction via llama-cpp-rs.
-    //
-    // Pseudocode for the real implementation:
-    //
-    //   let metadata = model.metadata();
-    //   let architecture = metadata.get(&config.probes.lora_compat.architecture_metadata_key)
-    //       .map(|v| v.to_lowercase());
-    //   let lora_compatible = architecture
-    //       .as_ref()
-    //       .map(|arch| config.model.lora_compatible_architectures.iter().any(|a| arch.contains(&a.to_lowercase())))
-    //       .unwrap_or(false);
 
     let detected_architecture = extract_architecture_stub(&config.model.model_path)?;
 
@@ -93,9 +73,12 @@ pub async fn run(config: &ModelProbeConfig) -> SenaResult<LoraCompatResult> {
     })
 }
 
-/// Stub architecture extraction — returns None until real GGUF parsing is wired.
+/// Architecture extraction from model path.
 ///
-/// Validates that the model path is non-empty so wiring failures surface early.
+/// Attempts to infer architecture from the model filename. Full GGUF header
+/// parsing (Milestone E: lora-manager integration) will replace this with
+/// actual metadata extraction. Until then, filename-based detection provides
+/// a reasonable heuristic for common model families.
 fn extract_architecture_stub(model_path: &str) -> SenaResult<Option<String>> {
     if model_path.is_empty() {
         return Err(SenaError::new(
@@ -104,11 +87,36 @@ fn extract_architecture_stub(model_path: &str) -> SenaResult<Option<String>> {
         ));
     }
 
-    tracing::warn!(
+    // Heuristic: extract architecture from filename patterns.
+    // Common conventions: "llama-3.2-3b-q4.gguf", "mistral-7b.gguf", "qwen2-0.5b.gguf"
+    let filename = std::path::Path::new(model_path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    let known_families = [
+        "llama", "mistral", "qwen2", "qwen", "gemma2", "gemma", "phi3", "phi",
+        "deepseek", "yi", "starcoder", "codellama",
+    ];
+
+    for family in &known_families {
+        if filename.contains(family) {
+            tracing::info!(
+                subsystem = "model_probe",
+                probe_name = "lora_compat",
+                detected = %family,
+                source = "filename_heuristic",
+                "architecture detected from model filename"
+            );
+            return Ok(Some(family.to_string()));
+        }
+    }
+
+    tracing::info!(
         subsystem = "model_probe",
         probe_name = "lora_compat",
-        event_type = "probe_stubbed",
-        "LoRA compat probe is stubbed — returning None for architecture until llama-cpp-rs metadata extraction is integrated"
+        model_path = %model_path,
+        "no recognized architecture in filename — LoRA compatibility unknown"
     );
 
     Ok(None)

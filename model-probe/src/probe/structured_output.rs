@@ -9,7 +9,10 @@ use std::time::Instant;
 
 use crate::config::StructuredOutputProbeConfig;
 use crate::error::SenaResult;
+use crate::generated::sena_daemonbus_v1::inference_service_client::InferenceServiceClient;
+use crate::generated::sena_daemonbus_v1::CompleteRequest;
 use crate::probes::{CapabilityLevel, ProbeResult};
+use tonic::transport::Channel;
 
 /// Run the structured output probe against the active model.
 ///
@@ -17,26 +20,28 @@ use crate::probes::{CapabilityLevel, ProbeResult};
 /// then scores the output against `config.expected_schema`. The score is the
 /// fraction of required schema fields that are present and correctly typed.
 ///
-/// # Scoring
-/// - `>= full_threshold` → `CapabilityLevel::Full`
-/// - `>= partial_threshold` → `CapabilityLevel::Partial`
-/// - below partial → `CapabilityLevel::None`
+/// # Graceful Degradation
+/// When `inference_client` is None or inference calls fail:
+/// 1. Logs a warning
+/// 2. Returns score 0.0 with `degraded: true`
+/// 3. Does NOT return an error
 pub async fn run(
     config: &StructuredOutputProbeConfig,
     probe_timeout_ms: u64,
+    inference_client: Option<InferenceServiceClient<Channel>>,
 ) -> SenaResult<ProbeResult> {
     let started_at = Instant::now();
 
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(probe_timeout_ms),
-        run_inner(config),
+        run_inner(config, inference_client),
     )
     .await;
 
     let duration = started_at.elapsed();
 
     match result {
-        Ok(Ok(score)) => {
+        Ok(Ok((score, degraded))) => {
             let capability = CapabilityLevel::from_score(
                 score,
                 config.partial_threshold,
@@ -50,6 +55,7 @@ pub async fn run(
                 score = score,
                 result = %capability,
                 duration_ms = duration.as_millis() as u64,
+                degraded = degraded,
                 "structured output probe completed"
             );
 
@@ -58,7 +64,7 @@ pub async fn run(
                 raw_score: score,
                 capability_level: Some(capability),
                 duration,
-                degraded: true, // TODO: Implement real inference probe
+                degraded,
             })
         }
         Ok(Err(probe_error)) => {
@@ -101,22 +107,58 @@ pub async fn run(
     }
 }
 
-/// Inner probe logic — separated so the timeout wrapper stays clean.
-///
-/// TODO(implementation): Replace stub with actual llama-cpp-rs inference call.
-/// The real implementation will:
-/// 1. Send `config.probe_prompt` to the model via llama-cpp-rs
-/// 2. Parse the response as JSON
-/// 3. Validate against `config.expected_schema`
-/// 4. Score as fraction of required fields present and correctly typed
-async fn run_inner(config: &StructuredOutputProbeConfig) -> SenaResult<f64> {
-    let _prompt = &config.probe_prompt;
-    let _schema = &config.expected_schema;
+/// Inner probe logic — sends the prompt to inference and scores the response.
+async fn run_inner(
+    config: &StructuredOutputProbeConfig,
+    inference_client: Option<InferenceServiceClient<Channel>>,
+) -> SenaResult<(f64, bool)> {
+    let degraded = inference_client.is_none();
 
-    // Stub: return 0.0 to indicate "not yet probed" — downstream consumers
-    // treat this as CapabilityLevel::None, which is the correct conservative
-    // default for an unimplemented probe.
-    Ok(0.0)
+    if degraded {
+        tracing::warn!(
+            subsystem = "model_probe",
+            probe_name = "structured_output",
+            reason = "inference_unavailable",
+            "probe degraded — InferenceService client not available"
+        );
+        return Ok((0.0, true));
+    }
+
+    let mut client = inference_client.expect("checked above"); // safe: guarded by degraded check
+
+    let request = CompleteRequest {
+        prompt: config.probe_prompt.clone(),
+        model_id: String::new(),
+        max_tokens: 512,
+        temperature: 0.0,
+        priority: 3,
+        request_id: format!("probe-structured-output-{}", timestamp_nanos()),
+    };
+
+    let response = match client.complete(request).await {
+        Ok(resp) => resp.into_inner().text,
+        Err(inference_error) => {
+            tracing::warn!(
+                subsystem = "model_probe",
+                probe_name = "structured_output",
+                event_type = "inference_failed",
+                error = %inference_error,
+                "inference call failed — returning degraded result"
+            );
+            return Ok((0.0, true));
+        }
+    };
+
+    let score = score_structured_output(&response, &config.expected_schema);
+    Ok((score, false))
+}
+
+fn timestamp_nanos() -> u64 {
+    use std::time::SystemTime;
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 /// Validate a JSON response string against the expected schema fields.

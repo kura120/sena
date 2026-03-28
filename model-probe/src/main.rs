@@ -460,7 +460,7 @@ async fn signal_model_profile_ready(
         .signal_ready(BootSignalRequest {
             subsystem_id: "model-probe".to_string(),
             signal: BootSignal::ModelProfileReady.into(),
-            capabilities: capabilities::get_capabilities(),
+            capabilities: capabilities::get_capabilities(&model_profile.degraded_probes),
         })
         .await
         .map_err(|status| {

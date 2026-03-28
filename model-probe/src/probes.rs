@@ -163,7 +163,11 @@ pub async fn run_probe_battery(
     
     // Clone the inference client for each probe that needs it
     let context_window_client = inference_client.clone();
-    let graph_extraction_client = inference_client;
+    let graph_extraction_client = inference_client.clone();
+    let instruction_following_client = inference_client.clone();
+    let structured_output_client = inference_client.clone();
+    let reasoning_client = inference_client.clone();
+    let memory_fidelity_client = inference_client;
 
     let (
         context_window_result,
@@ -180,15 +184,24 @@ pub async fn run_probe_battery(
             context_window_client,
             per_probe_timeout_ms,
         ),
-        structured_output::run(&config.probes.structured_output, per_probe_timeout_ms),
-        instruction_following::run(&config.probes.instruction_following, &model_id_owned),
+        structured_output::run(
+            &config.probes.structured_output,
+            per_probe_timeout_ms,
+            structured_output_client,
+        ),
+        instruction_following::run(
+            &config.probes.instruction_following,
+            &model_id_owned,
+            instruction_following_client,
+        ),
         reasoning::run_reasoning_probe(
             &config.probes.reasoning,
             &model_id_owned,
             per_probe_timeout_ms,
+            reasoning_client,
         ),
         lora_compat::run(&config_clone_for_lora),
-        memory_fidelity::run(&config.probes.memory_fidelity),
+        memory_fidelity::run(&config.probes.memory_fidelity, memory_fidelity_client),
         graph_extraction::run(&config.probes.graph_extraction, graph_extraction_client),
     );
 
@@ -274,6 +287,13 @@ pub async fn run_probe_battery(
             false
         }
     };
+
+    // Memory injection fidelity — check degradation first
+    if let Ok(ref mf_result) = memory_fidelity_result {
+        if mf_result.degraded {
+            degraded_probes.push("memory_fidelity".to_string());
+        }
+    }
 
     // Memory injection fidelity
     let memory_injection_fidelity = match memory_fidelity_result {
